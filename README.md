@@ -177,8 +177,9 @@ what you need:
 OSIRIS_PORT=3000
 
 # RECON scanner backend (the only vars the current code reads).
+# The scanner runs as a separate service (osiris-scanner) on port 7700.
 # SCANNER_KEY must match the backend's OSIRIS_KEY — generate with: openssl rand -hex 32
-SCANNER_URL=
+SCANNER_URL=http://osiris-scanner:7700
 SCANNER_KEY=
 
 # Optional, for higher rate limits / future sources (see DOCKER.md for signup links)
@@ -192,6 +193,28 @@ AIS_API_KEY=                 # aisstream.io maritime
 > Without `SCANNER_URL`/`SCANNER_KEY` the RECON toolkit returns `503`; every
 > other layer works out of the box. `.env` is gitignored — only the template is committed.
 
+### RECON Scanner
+
+The RECON toolkit requires a separate scanner backend written in **Go** (~5MB memory).
+
+**Native (recommended):**
+```bash
+cd scanner
+make run  # Build and start on port 7700
+
+# Or manually
+go build -o scanner .
+OSIRIS_KEY=$(openssl rand -hex 32) ./scanner
+```
+
+**Docker Compose:**
+```bash
+echo "SCANNER_KEY=$(openssl rand -hex 32)" >> .env
+docker compose up -d
+```
+
+See [DOCKER.md](DOCKER.md) for all endpoints and cross-compilation.
+
 ---
 
 ## Tech Stack
@@ -199,7 +222,7 @@ AIS_API_KEY=                 # aisstream.io maritime
 | Layer | Technology |
 |-------|-----------|
 | Framework | Next.js 16 (App Router, Turbopack) |
-| Language | TypeScript 5 |
+| Language | TypeScript 5, Go (scanner) |
 | Map Engine | MapLibre GL JS (WebGL) |
 | Animations | Framer Motion |
 | Icons | Lucide React |

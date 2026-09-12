@@ -53,6 +53,20 @@ services:
     networks:
       - default
 
+  osiris-scanner:
+    build:
+      context: ./scanner
+      dockerfile: Dockerfile
+    container_name: osiris-scanner
+    ports:
+      - "7700:7700"
+    environment:
+      - OSIRIS_KEY=${SCANNER_KEY:-}
+      - SCANNER_PORT=7700
+    restart: unless-stopped
+    networks:
+      - default
+
 volumes:
   nginx-cache:
 
@@ -93,10 +107,10 @@ x-casaos:
   envs:
     - container: SCANNER_URL
       description:
-        en_us: "(Optional) RECON scanner backend URL, e.g. http://scanner:7700"
+        en_us: "(Optional) RECON scanner backend URL, e.g. http://osiris-scanner:7700"
     - container: SCANNER_KEY
       description:
-        en_us: "(Optional) RECON scanner shared secret (must match backend OSIRIS_KEY)."
+        en_us: "(Optional) RECON scanner shared secret (must match osiris-scanner OSIRIS_KEY)."
     - container: FIRMS_API_KEY
       description:
         en_us: "(Optional) NASA FIRMS API key for active-fire data."

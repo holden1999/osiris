@@ -115,11 +115,55 @@ Copy `.env.template` to `.env` and fill in only what you need.
 
 | Variable | Purpose | Required for |
 |----------|---------|--------------|
-| `SCANNER_URL` | RECON scanner backend base URL (e.g. `http://scanner:7700`) | RECON toolkit (quick/ssl/headers/rdns/subdomains/tech/whois/geoloc/vuln) |
+| `SCANNER_URL` | RECON scanner backend base URL (e.g. `http://osiris-scanner:7700`) | RECON toolkit (quick/ssl/headers/rdns/subdomains/tech/whois/geoloc/vuln) |
 | `SCANNER_KEY` | Shared secret; **must equal the backend's `OSIRIS_KEY`** | RECON toolkit |
 
 Without `SCANNER_URL`/`SCANNER_KEY` the RECON endpoints return `503` and the
 rest of OSIRIS works normally. Generate a key with `openssl rand -hex 32`.
+
+### Running the RECON Scanner
+
+The scanner is written in **Go** for optimal performance (~5MB memory vs ~30MB for Node.js). It runs as a separate service on port 7700.
+
+**Native (recommended for development):**
+```bash
+cd scanner
+# Build and run
+make run
+
+# Or manually
+go build -o scanner .
+OSIRIS_KEY=<your-secret> ./scanner
+
+# Then set SCANNER_URL=http://localhost:7700 in the main .env
+```
+
+**With Docker Compose:**
+```bash
+# The scanner starts automatically with docker compose up
+# Just set SCANNER_URL and SCANNER_KEY in .env:
+echo "SCANNER_URL=http://osiris-scanner:7700" >> .env
+echo "SCANNER_KEY=$(openssl rand -hex 32)" >> .env
+docker compose up -d
+```
+
+**Cross-compile for other platforms:**
+```bash
+make build-all  # Builds for linux/amd64, linux/arm64, darwin/arm64, darwin/amd64
+```
+
+**Scanner endpoints:**
+| Endpoint | Description |
+|----------|-------------|
+| `/scan/quick` | Quick port scan (top 16 ports) |
+| `/scan/ssl` | SSL/TLS certificate inspection |
+| `/scan/headers` | HTTP security headers audit |
+| `/scan/rdns` | Reverse DNS lookup |
+| `/scan/subdomains` | Subdomain enumeration |
+| `/scan/tech` | Technology stack detection |
+| `/scan/whois` | Domain registration (RDAP) |
+| `/scan/geoloc` | IP geolocation |
+| `/scan/vuln` | CVE vulnerability scan |
 
 ### Optional keys (reserved / for higher rate limits)
 
