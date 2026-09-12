@@ -326,8 +326,9 @@ export default function CameraViewer({ camera, onClose, onLocate }: CameraViewer
               <iframe
                 src={streamUrl}
                 className="w-full h-full border-0"
-                allow="autoplay; fullscreen"
+                allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
                 allowFullScreen
+                referrerPolicy="no-referrer-when-downgrade"
               />
             ) : imageUrl ? (
               <img
