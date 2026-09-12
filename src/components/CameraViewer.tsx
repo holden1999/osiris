@@ -80,6 +80,11 @@ export default function CameraViewer({ camera, onClose, onLocate }: CameraViewer
 
   const streamType = resolvedEmbed ? 'iframe' : (camera?.stream_type || 'jpg');
   const streamUrl: string | undefined = resolvedEmbed || camera?.stream_url;
+  /* The BaliTower (Jakarta Smart City) embeds — Monas and the city traffic
+     feeds — only hand out streams to Indonesian IPs; outside the country the
+     iframe fails with a blank connect error. Flag them so that failure mode
+     is readable instead of a silent black box. */
+  const indonesiaOnly = !!streamUrl && /cctv\.balitower\.co\.id/.test(streamUrl);
   const view = offPlatformView({ hostedOffPlatform, resolving, resolvedEmbed, offline });
   const externalOnly = view !== 'inline';
 
@@ -323,13 +328,22 @@ export default function CameraViewer({ camera, onClose, onLocate }: CameraViewer
                 loop
               />
             ) : streamType === 'iframe' && streamUrl ? (
-              <iframe
-                src={streamUrl}
-                className="w-full h-full border-0"
-                allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                allowFullScreen
-                referrerPolicy="no-referrer-when-downgrade"
-              />
+              <>
+                <iframe
+                  src={streamUrl}
+                  className="w-full h-full border-0"
+                  allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                  allowFullScreen
+                  referrerPolicy="no-referrer-when-downgrade"
+                />
+                {indonesiaOnly && (
+                  <div className="absolute bottom-2 right-2 bg-black/70 border border-amber-500/40 px-2 py-1 rounded-sm">
+                    <span className="text-[9px] font-mono text-amber-300/90 tracking-[0.15em]">
+                      INDONESIA-ONLY FEED · USE AN ID VPN
+                    </span>
+                  </div>
+                )}
+              </>
             ) : imageUrl ? (
               <img
                 src={imageUrl}
