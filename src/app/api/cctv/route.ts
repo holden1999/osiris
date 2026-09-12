@@ -27,6 +27,7 @@ import { fetchUtahCameras } from './utah';
 import { fetchIcelandCameras } from './iceland';
 import { fetchTaiwanCameras } from './taiwan';
 import { fetchThailandCameras } from './thailand';
+import { fetchIndonesiaCameras } from './indonesia';
 import { fetchAsiaLiveCameras } from './asia-live';
 import { fetchNewZealandCameras } from './newzealand';
 import { fetchOregonCameras } from './oregon';
@@ -499,6 +500,7 @@ const RAW_REGION_FETCHERS: Record<string, RegionFetcher> = {
   'iceland': fetchIcelandCameras,
   'taiwan': fetchTaiwanCameras,
   'thailand': fetchThailandCameras,
+  'indonesia': fetchIndonesiaCameras,
   'asia-live': fetchAsiaLiveCameras,
   'newzealand': fetchNewZealandCameras,
   'oregon': fetchOregonCameras,
@@ -526,11 +528,19 @@ const RAW_REGION_FETCHERS: Record<string, RegionFetcher> = {
  * them megabytes, two of them long dead. Under real traffic that is one
  * outbound fetch storm per visitor. Caching here rather than in each module
  * means a source added later cannot forget to do it.
+ *
+ * Camera indexes change on a week scale, so the production TTL is 30 minutes.
+ * During local development that same TTL would bury a coordinate fix for half
+ * an hour — which reads as "hot reload is broken". Dev gets a 60-second TTL:
+ * still deduped against stampedes and still stale-on-error, just short enough
+ * that an edit to a region file shows up on the next page refresh.
  */
+const REGION_CACHE_TTL_MS = process.env.NODE_ENV === 'development' ? 60_000 : 30 * 60 * 1000;
+
 const REGION_FETCHERS: Record<string, RegionFetcher> = Object.fromEntries(
   Object.entries(RAW_REGION_FETCHERS).map(([region, fetcher]) => [
     region,
-    cachedSource(`cctv:${region}`, fetcher),
+    cachedSource(`cctv:${region}`, fetcher, REGION_CACHE_TTL_MS),
   ]),
 );
 
@@ -640,6 +650,10 @@ function getRegionsForBounds(lat: number, lng: number, radius: number): string[]
 
   // Thailand — mainland through the Gulf islands
   if (lat > 5.5 && lat < 20.5 && lng > 97.3 && lng < 105.7) regions.push('thailand');
+
+  // Indonesia — Jakarta Smart City traffic cameras (BaliTower HLS) and the
+  // Bogor toll cameras on the Ciawi–Sukabumi motorway (MUDIK / Trans Jabar Tol)
+  if (lat > -11 && lat < 6 && lng > 95 && lng < 141) regions.push('indonesia');
 
   // Asia live webcams — spans West Asia (Turkey / Levant / Gulf) through Japan and Indonesia
   if (lat > -11 && lat < 46 && lng > 25 && lng < 155) regions.push('asia-live');

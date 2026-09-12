@@ -85,6 +85,48 @@ export function streamKind(feedType?: string | null): CctvStreamType | 'jpg' | n
   }
 }
 
+/**
+ * OpenCCTV's own coordinates for the Hutama Karya "MUDIK" cameras on the
+ * Jakarta Outer Ring Road south arc (JORR S) are generated from the camera
+ * *name* — mostly chainage markers like "23+200" — by an upstream geocoder
+ * that placed the whole corridor up to 5 km north-east of the toll road
+ * (GT Ampera and GT Lenteng Agung verify 1.7–5 km off, in the wrong order).
+ *
+ * The pins are re-anchored onto the JORR S alignment. GT Ampera (km 27) and
+ * GT Lenteng Agung (km 30) were verified against OSM — those two fix the
+ * chainage; the km-marker cameras sit at their own chainage; the remaining
+ * gates keep their kilometre order west→east (Fatmawati 25 · Ampera 27 ·
+ * Lenteng Agung 30 · Gedong 32 · Kampung Rambutan 32+ · Pasar Rebo 32+),
+ * roughly 1 km per chainage unit at this latitude.
+ */
+const JAKARTA_JORR_FIXES: Record<string, { lat: number; lng: number }> = {
+  'mudik-BUJT-2368': { lat: -6.2773, lng: 106.7686 }, /* 19+850 */
+  'mudik-BUJT-2371': { lat: -6.2847, lng: 106.7746 }, /* 21+300 */
+  'mudik-BUJT-2373': { lat: -6.2906, lng: 106.7810 }, /* 22+400 */
+  'mudik-BUJT-2374': { lat: -6.2915, lng: 106.7845 }, /* 23+000 */
+  'mudik-BUJT-2375': { lat: -6.2917, lng: 106.7860 }, /* 23+200 */
+  'mudik-BUJT-2376': { lat: -6.2922, lng: 106.7890 }, /* 23+600 */
+  'mudik-BUJT-2377': { lat: -6.2922, lng: 106.7921 }, /* 24+000 */
+  'mudik-BUJT-2116': { lat: -6.29244, lng: 106.81920 }, /* JORRS GT AMPERA 1 — OSM-verified */
+  'mudik-BUJT-2117': { lat: -6.2926, lng: 106.8196 }, /* JORRS GT AMPERA 2 */
+  'mudik-BUJT-2119': { lat: -6.2923, lng: 106.8011 }, /* JORRS GT FATMAWATI 2 */
+  'mudik-BUJT-2120': { lat: -6.3046, lng: 106.8536 }, /* JORRS GT GEDONG 2 */
+  'mudik-BUJT-2121': { lat: -6.3048, lng: 106.8546 }, /* JORRS GT KP RAMBUTAN */
+  'mudik-BUJT-2122': { lat: -6.30126, lng: 106.83547 }, /* JORRS GT LENTENG 1 — OSM-verified */
+  'mudik-BUJT-2123': { lat: -6.3015, lng: 106.8364 }, /* JORRS GT LENTENG AGUNG 2 */
+  'mudik-BUJT-2124': { lat: -6.3053, lng: 106.8574 }, /* JORRS GT PASAR REBO */
+};
+
+/** Re-anchor a camera whose upstream coordinates are known to be wrong, in place. */
+export function applyCoordinateFix(rec: { id?: string }, cam: CctvCamera): CctvCamera {
+  const fix = rec.id ? JAKARTA_JORR_FIXES[rec.id] : undefined;
+  if (fix) {
+    cam.lat = fix.lat;
+    cam.lng = fix.lng;
+  }
+  return cam;
+}
+
 /** Map one record to a camera, or null if it should be skipped. */
 export function mapRecord(rec: OpenCctvRecord): CctvCamera | null {
   if (!rec?.id || rec.active === 0) return null;
@@ -196,7 +238,10 @@ function loader(region: string, bounds: Bounds, cap: number) {
       if (r.status !== 'fulfilled') continue;
       for (const rec of r.value) {
         const cam = mapRecord(rec);
-        if (cam) seen.set(cam.id, cam);
+        if (cam) {
+          applyCoordinateFix(rec, cam);
+          seen.set(cam.id, cam);
+        }
       }
     }
 
