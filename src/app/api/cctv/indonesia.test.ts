@@ -85,4 +85,21 @@ describe('fetchIndonesiaCameras', () => {
       prevLng = c.lng;
     }
   });
+
+  /* The Monas cameras are baked from the OpenCCTV index so all 57 angles
+     appear (the seasia fetch samples only ~1 in 10 of the index), with the
+     jakarta-Monas-* originals dropped from the OpenCCTV path. */
+  it('ships all 57 Monas cameras as iframe embeds around the monument', async () => {
+    const cams = await fetchIndonesiaCameras();
+    const monas = cams.filter(c => c.id.startsWith('id-jkt-mn-'));
+    expect(monas).toHaveLength(57);
+    for (const c of monas) {
+      expect(c.stream_type, `${c.id}`).toBe('iframe');
+      expect(c.stream_url, `${c.id}`).toMatch(/^https:\/\/cctv\.balitower\.co\.id\/Monas-/);
+      expect(c.lat, `${c.id} lat`).toBeGreaterThan(-6.181);
+      expect(c.lat, `${c.id} lat`).toBeLessThan(-6.170);
+      expect(c.lng, `${c.id} lng`).toBeGreaterThan(106.822);
+      expect(c.lng, `${c.id} lng`).toBeLessThan(106.831);
+    }
+  });
 });

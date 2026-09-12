@@ -225,6 +225,10 @@ describe('mapRecord', () => {
     expect(mapRecord({ ...sampleRow, cache_buster_breaks_url: true })).not.toBeNull();
   });
 
+  it('drops the jakarta-Monas-* rows that indonesia.ts serves statically', () => {
+    expect(mapRecord({ ...sampleRow, id: 'jakarta-Monas-Timur-006_a', source: 'jakarta' })).toBeNull();
+  });
+
   it('drops inactive, feedless, coordinateless and unplayable rows', () => {
     expect(mapRecord({ ...sampleRow, active: 0 })).toBeNull();
     expect(mapRecord({ ...sampleRow, feed_url: null })).toBeNull();

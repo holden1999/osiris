@@ -280,6 +280,11 @@ export function applyCoordinateFix(rec: { id?: string }, cam: CctvCamera): CctvC
 export function mapRecord(rec: OpenCctvRecord): CctvCamera | null {
   if (!rec?.id || rec.active === 0) return null;
 
+  /* The jakarta-Monas-* cameras are served statically from indonesia.ts (the
+     OpenCCTV index samples ~1 in 10 of these, which would show only a few of
+     the 57 angles). Dropping them here keeps the map free of duplicate pins. */
+  if (rec.id.startsWith('jakarta-Monas-')) return null;
+
   const url = rec.feed_url?.trim();
   if (!url) return null;
 
