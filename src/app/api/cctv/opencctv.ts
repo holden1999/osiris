@@ -142,10 +142,129 @@ const CIMANGGIS_CIBITUNG_FIXES: Record<string, { lat: number; lng: number }> = {
   'mudik-BUJT-2188': { lat: -6.38421, lng: 106.95353 }, /* KM 56+000 */
 };
 
-const OPENCCTV_COORD_FIXES: Record<string, { lat: number; lng: number }> = {
+
+/**
+ * And the full sweep of the remaining MUDIK corridors — every one of these was
+ * off its road, from ~2 km (the Lampung and Jakarta gates) out to ~22 km (the
+ * Gending cameras were pinned at the north-coast trunk road instead of the
+ * toll). Each pin is re-chained to its road using the official interchange km
+ * tables (Wikipedia) and the OSM alignment:
+ *   • Palembang–Indralaya       km 0 Ramp Palembang → 18 Indralaya
+ *   • Serang–Panimbang Seksi 1  km 64 Walantaka → 90 Rangkasbitung
+ *   • Pasuruan–Probolinggo      km 837+600 … 849+600 (SS Gending 849, then
+ *                               the Probolinggo–Banyuwangi continuation)
+ *   • Serpong–Balaraja Seksi 1  km 12+750 … 16+650 (Rawabuntu 12, BSD 16)
+ *   • Terbanggi Besar–Kayu Agung km 177 … 181 (Gunung Batin 166 → Menggala 184)
+ *   • Akses Tanjung Priok       km 58+400 … 61+400 (into Tanjung Priok port)
+ *   • Tol Dalam Kota Ruas 6     km 22+670 … 27+100 (Kelapa Gading → Pulo Gebang)
+ */
+const MUDIK_INDONESIAN_TOLLS_FIXES: Record<string, { lat: number; lng: number }> = {
+  'mudik-BUJT-197': { lat: -6.14882, lng: 106.24321 },
+  'mudik-BUJT-201': { lat: -6.14965, lng: 106.24323 },
+  'mudik-BUJT-2156': { lat: -3.10977, lng: 104.72533 },
+  'mudik-BUJT-2157': { lat: -3.20769, lng: 104.69 },
+  'mudik-BUJT-2158': { lat: -3.15405, lng: 104.70946 },
+  'mudik-BUJT-2159': { lat: -3.1559, lng: 104.70895 },
+  'mudik-BUJT-2160': { lat: -3.11149, lng: 104.72447 },
+  'mudik-BUJT-2177': { lat: -6.1085, lng: 106.90437 },
+  'mudik-BUJT-2178': { lat: -6.11695, lng: 106.89443 },
+  'mudik-BUJT-2179': { lat: -6.12581, lng: 106.89314 },
+  'mudik-BUJT-2301': { lat: -7.81783, lng: 113.2107 },
+  'mudik-BUJT-2305': { lat: -7.82183, lng: 113.30619 },
+  'mudik-BUJT-2307': { lat: -7.8218, lng: 113.3071 },
+  'mudik-BUJT-2308': { lat: -7.8218, lng: 113.3071 },
+  'mudik-BUJT-2310': { lat: -7.82177, lng: 113.308 },
+  'mudik-BUJT-2311': { lat: -7.82158, lng: 113.30844 },
+  'mudik-BUJT-2313': { lat: -7.8231, lng: 113.29362 },
+  'mudik-BUJT-2314': { lat: -7.8222, lng: 113.30079 },
+  'mudik-BUJT-2315': { lat: -7.82738, lng: 113.27894 },
+  'mudik-BUJT-2317': { lat: -7.83254, lng: 113.24275 },
+  'mudik-BUJT-2318': { lat: -7.832, lng: 113.25171 },
+  'mudik-BUJT-2319': { lat: -7.82943, lng: 113.2602 },
+  'mudik-BUJT-2321': { lat: -7.82868, lng: 113.26914 },
+  'mudik-BUJT-2322': { lat: -7.82758, lng: 113.27805 },
+  'mudik-BUJT-2323': { lat: -7.82508, lng: 113.2867 },
+  'mudik-BUJT-2324': { lat: -7.82281, lng: 113.29541 },
+  'mudik-BUJT-2326': { lat: -7.82158, lng: 113.31344 },
+  'mudik-BUJT-2378': { lat: -6.13934, lng: 106.938 },
+  'mudik-BUJT-2379': { lat: -6.13934, lng: 106.938 },
+  'mudik-BUJT-2380': { lat: -6.1247, lng: 106.92793 },
+  'mudik-BUJT-2381': { lat: -6.1247, lng: 106.92793 },
+  'mudik-BUJT-2382': { lat: -6.11362, lng: 106.92426 },
+  'mudik-BUJT-2384': { lat: -6.10876, lng: 106.91032 },
+  'mudik-BUJT-2385': { lat: -6.10876, lng: 106.91032 },
+  'mudik-BUJT-2386': { lat: -6.13467, lng: 106.8919 },
+  'mudik-BUJT-2387': { lat: -6.13467, lng: 106.8919 },
+  'mudik-BUJT-2388': { lat: -3.06613, lng: 104.75144 },
+  'mudik-BUJT-2389': { lat: -3.06613, lng: 104.75144 },
+  'mudik-BUJT-2390': { lat: -3.07554, lng: 104.74966 },
+  'mudik-BUJT-2391': { lat: -3.07554, lng: 104.74966 },
+  'mudik-BUJT-2392': { lat: -3.08376, lng: 104.7448 },
+  'mudik-BUJT-2393': { lat: -3.08376, lng: 104.7448 },
+  'mudik-BUJT-2395': { lat: -3.09109, lng: 104.73861 },
+  'mudik-BUJT-2396': { lat: -3.09857, lng: 104.73261 },
+  'mudik-BUJT-2397': { lat: -3.09857, lng: 104.73261 },
+  'mudik-BUJT-2409': { lat: -4.64931, lng: 105.19061 },
+  'mudik-BUJT-2410': { lat: -4.6435, lng: 105.19124 },
+  'mudik-BUJT-2411': { lat: -4.6435, lng: 105.19124 },
+  'mudik-BUJT-2412': { lat: -4.63787, lng: 105.19277 },
+  'mudik-BUJT-2413': { lat: -4.63787, lng: 105.19277 },
+  'mudik-BUJT-2414': { lat: -4.6328, lng: 105.19551 },
+  'mudik-BUJT-2415': { lat: -4.6328, lng: 105.19551 },
+  'mudik-BUJT-2416': { lat: -4.62705, lng: 105.19552 },
+  'mudik-BUJT-2417': { lat: -4.62705, lng: 105.19552 },
+  'mudik-BUJT-2461': { lat: -6.30089, lng: 106.69683 },
+  'mudik-BUJT-2462': { lat: -6.30194, lng: 106.69512 },
+  'mudik-BUJT-2463': { lat: -6.30194, lng: 106.69512 },
+  'mudik-BUJT-2464': { lat: -6.30404, lng: 106.69169 },
+  'mudik-BUJT-2465': { lat: -6.30404, lng: 106.69169 },
+  'mudik-BUJT-2466': { lat: -6.30754, lng: 106.68598 },
+  'mudik-BUJT-2467': { lat: -6.30754, lng: 106.68598 },
+  'mudik-BUJT-2468': { lat: -6.31104, lng: 106.68027 },
+  'mudik-BUJT-2469': { lat: -6.31104, lng: 106.68027 },
+  'mudik-BUJT-2470': { lat: -6.31214, lng: 106.67408 },
+  'mudik-BUJT-2471': { lat: -6.31214, lng: 106.67408 },
+  'mudik-BUJT-2472': { lat: -6.30696, lng: 106.67007 },
+  'mudik-BUJT-2473': { lat: -6.30696, lng: 106.67007 },
+  'mudik-BUJT-2474': { lat: -6.3048, lng: 106.6646 },
+  'mudik-BUJT-2475': { lat: -6.3048, lng: 106.6646 },
+  'mudik-BUJT-2476': { lat: -6.30415, lng: 106.65864 },
+  'mudik-BUJT-2477': { lat: -6.30415, lng: 106.65864 },
+  'mudik-BUJT-2478': { lat: -6.30461, lng: 106.65135 },
+  'mudik-BUJT-2479': { lat: -6.30461, lng: 106.65135 },
+  'mudik-BUJT-2481': { lat: -6.30415, lng: 106.65864 },
+  'mudik-BUJT-2482': { lat: -6.30428, lng: 106.65997 },
+  'mudik-BUJT-2483': { lat: -6.30415, lng: 106.65864 },
+  'mudik-BUJT-2484': { lat: -6.30442, lng: 106.66129 },
+  'mudik-BUJT-286': { lat: -6.30261, lng: 106.25405 },
+  'mudik-BUJT-287': { lat: -6.28586, lng: 106.25876 },
+  'mudik-BUJT-312': { lat: -6.33533, lng: 106.23234 },
+  'mudik-BUJT-322': { lat: -6.34124, lng: 106.22945 },
+  'mudik-BUJT-324': { lat: -6.342, lng: 106.22914 },
+  'mudik-BUJT-339': { lat: -6.16153, lng: 106.25009 },
+  'mudik-BUJT-340': { lat: -6.16958, lng: 106.24942 },
+  'mudik-BUJT-347': { lat: -6.20475, lng: 106.25852 },
+  'mudik-BUJT-363': { lat: -6.21191, lng: 106.26242 },
+  'mudik-BUJT-377': { lat: -6.22504, lng: 106.26897 },
+  'mudik-BUJT-424': { lat: -6.23384, lng: 106.26742 },
+  'mudik-BUJT-425': { lat: -6.21459, lng: 106.26431 },
+  'mudik-BUJT-559': { lat: -6.27107, lng: 106.26339 },
+  'mudik-BUJT-560': { lat: -6.27937, lng: 106.25983 },
+  'mudik-BUJT-859': { lat: -6.18841, lng: 106.942 },
+  'mudik-BUJT-860': { lat: -6.18589, lng: 106.93906 },
+  'mudik-BUJT-862': { lat: -6.18322, lng: 106.92369 },
+  'mudik-BUJT-865': { lat: -6.16716, lng: 106.91603 },
+  'mudik-BUJT-867': { lat: -6.15983, lng: 106.90378 },
+  'mudik-BUJT-868': { lat: -6.15614, lng: 106.898 },
+  'mudik-BUJT-870': { lat: -6.18841, lng: 106.942 },
+};
+
+export const OPENCCTV_COORD_FIXES: Record<string, { lat: number; lng: number }> = {
   ...JAKARTA_JORR_FIXES,
   ...CIMANGGIS_CIBITUNG_FIXES,
+  ...MUDIK_INDONESIAN_TOLLS_FIXES,
 };
+
 
 /** Re-anchor a camera whose upstream coordinates are known to be wrong, in place. */
 export function applyCoordinateFix(rec: { id?: string }, cam: CctvCamera): CctvCamera {

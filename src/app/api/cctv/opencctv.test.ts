@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mapRecord, streamKind, sample, applyCoordinateFix, type OpenCctvRecord } from './opencctv';
+import { mapRecord, streamKind, sample, applyCoordinateFix, OPENCCTV_COORD_FIXES, type OpenCctvRecord } from './opencctv';
 
 /** A representative row from /api/cameras/batch. */
 const sampleRow: OpenCctvRecord = {
@@ -72,6 +72,76 @@ describe('applyCoordinateFix', () => {
     const cam = applyCoordinateFix(row, mapRecord(row)!);
     expect(cam.lat).toBe(37.4979);
     expect(cam.lng).toBe(127.0276);
+  });
+});
+
+describe('applyCoordinateFix — remaining MUDIK Indonesian corridors', () => {
+  /* The rest of the MUDIK fleet was off its road too, by 2-22 km: Gending
+     pinned to the north-coast trunk road, the Palembang-Indralaya gates
+     crammed at km 1-5, the Banten/Serpong groups 5-12 km west of the toll.
+     Every one is re-chained to its corridor (see MUDIK_INDONESIAN_TOLLS_FIXES). */
+  const row = (id: string): OpenCctvRecord => ({
+    id, name: id, city: 'x', country: 'ID',
+    lat: -6, lng: 106,
+    feed_url: 'https://x.example/stream.m3u8',
+    feed_type: 'm3u8', active: 1,
+  });
+
+  const fixed = (id: string) => applyCoordinateFix(row(id), mapRecord(row(id))!);
+
+  it('covers every one of the 127 MUDIK cameras, all in Indonesia', () => {
+    // JORR S (15) + Cimanggis-Cibitung (14) + the corridor sweep (98) = 127.
+    expect(Object.keys(OPENCCTV_COORD_FIXES)).toHaveLength(127);
+    for (const [id, fix] of Object.entries(OPENCCTV_COORD_FIXES)) {
+      expect(id).toMatch(/^mudik-BUJT-/);
+      expect(fix.lat).toBeGreaterThan(-11);
+      expect(fix.lat).toBeLessThan(6);
+      expect(fix.lng).toBeGreaterThan(95);
+      expect(fix.lng).toBeLessThan(141);
+    }
+  });
+
+  it('puts the Palembang gates back on the Palembang–Indralaya toll', () => {
+    const ktm = fixed('mudik-BUJT-2158');   // GT KTM Rambutan, km 12
+    const ind = fixed('mudik-BUJT-2157');   // GT Indralaya, km 18
+    const km1 = fixed('mudik-BUJT-2388');   // 01+600 A, km 1.6
+    expect(km1.lat).toBeGreaterThan(ind.lat);      // km grows westwards (lat drops)
+    expect(ktm.lat).toBeGreaterThan(ind.lat);
+    expect(ind.lat).toBeCloseTo(-3.20769, 4);      // lands at Indralaya
+  });
+
+  it('re-chains the Gending cameras onto the Pasuruan–Probolinggo toll', () => {
+    const k837 = fixed('mudik-BUJT-2301');
+    const k849 = fixed('mudik-BUJT-2326');   // continues onto Probolinggo–Banyuwangi
+    expect(k837.lng).toBeCloseTo(113.21070, 4);
+    expect(k849.lng).toBeGreaterThan(k837.lng);
+    expect(k849.lng).toBeCloseTo(113.31344, 4);
+  });
+
+  it('puts the BSD gates at BSD on the Serpong–Balaraja toll', () => {
+    const gt = fixed('mudik-BUJT-2482');
+    expect(gt.lat).toBeCloseTo(-6.30428, 4);
+    expect(gt.lng).toBeCloseTo(106.65997, 4);
+  });
+
+  it('keeps the Lampung kms between Gunung Batin (166) and Menggala (184)', () => {
+    const k177 = fixed('mudik-BUJT-2409');
+    const k181 = fixed('mudik-BUJT-2417');
+    expect(k177.lat).toBeGreaterThan(-4.87);   // north of Terbanggi Besar
+    expect(k181.lat).toBeGreaterThan(k177.lat); // km grows northward
+    expect(k177.lat).toBeGreaterThan(-4.66);
+  });
+
+  it('keeps every swept camera inside Indonesia', () => {
+    const ids = ['mudik-BUJT-197', 'mudik-BUJT-338', 'mudik-BUJT-2301', 'mudik-BUJT-2461', 'mudik-BUJT-2417',
+                 'mudik-BUJT-2378', 'mudik-BUJT-868', 'mudik-BUJT-2177', 'mudik-BUJT-2156'];
+    for (const id of ids) {
+      const cam = fixed(id);
+      expect(cam.lat).toBeGreaterThan(-11);
+      expect(cam.lat).toBeLessThan(6);
+      expect(cam.lng).toBeGreaterThan(95);
+      expect(cam.lng).toBeLessThan(141);
+    }
   });
 });
 
