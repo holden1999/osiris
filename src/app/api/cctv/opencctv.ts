@@ -117,9 +117,39 @@ const JAKARTA_JORR_FIXES: Record<string, { lat: number; lng: number }> = {
   'mudik-BUJT-2124': { lat: -6.3053, lng: 106.8574 }, /* JORRS GT PASAR REBO */
 };
 
+/**
+ * Same disease, second corridor: the MUDIK cameras on the Cimanggis–Cibitung
+ * toll (JORR 2) are placed by name too, again on the wrong spot — "VMS KM 25"
+ * and "GT Jatikarya 1" land up to 3 km off the carriageway. The toll's km
+ * markers continue from the Simpang Susun Cimanggis (km 49) through Jatikarya
+ * (52–53), Nagrak (56) and on to Cibitung (km 75); each camera is re-anchored
+ * at its own chainage along the OSM alignment (Wikipedia interchange list).
+ */
+const CIMANGGIS_CIBITUNG_FIXES: Record<string, { lat: number; lng: number }> = {
+  'mudik-BUJT-904': { lat: -6.38911, lng: 106.91043 }, /* VMS KM 25 (km 51) */
+  'mudik-BUJT-1166': { lat: -6.38911, lng: 106.91043 }, /* KM 25+000 (KM 51+000) */
+  'mudik-BUJT-1167': { lat: -6.38329, lng: 106.91747 }, /* KM 26+000 (KM 52+000) */
+  'mudik-BUJT-1171': { lat: -6.38103, lng: 106.92034 }, /* On Ramp Jatikarya */
+  'mudik-BUJT-903': { lat: -6.38109, lng: 106.92128 }, /* VMS On RAMP JATIKARYA */
+  'mudik-BUJT-1169': { lat: -6.38109, lng: 106.92128 }, /* GT Jatikarya 1 */
+  'mudik-BUJT-1168': { lat: -6.38169, lng: 106.92592 }, /* KM 27+000 (KM 53+000) */
+  'mudik-BUJT-2183': { lat: -6.38231, lng: 106.93056 }, /* KM 53+500 */
+  'mudik-BUJT-905': { lat: -6.38369, lng: 106.93499 }, /* Danau Onramp */
+  'mudik-BUJT-906': { lat: -6.38405, lng: 106.93586 }, /* Danau Offramp */
+  'mudik-BUJT-2184': { lat: -6.38369, lng: 106.93499 }, /* KM 54+000 */
+  'mudik-BUJT-2503': { lat: -6.38470, lng: 106.93859 }, /* KM 54+400 */
+  'mudik-BUJT-2186': { lat: -6.38461, lng: 106.94793 }, /* KM 55+400 */
+  'mudik-BUJT-2188': { lat: -6.38421, lng: 106.95353 }, /* KM 56+000 */
+};
+
+const OPENCCTV_COORD_FIXES: Record<string, { lat: number; lng: number }> = {
+  ...JAKARTA_JORR_FIXES,
+  ...CIMANGGIS_CIBITUNG_FIXES,
+};
+
 /** Re-anchor a camera whose upstream coordinates are known to be wrong, in place. */
 export function applyCoordinateFix(rec: { id?: string }, cam: CctvCamera): CctvCamera {
-  const fix = rec.id ? JAKARTA_JORR_FIXES[rec.id] : undefined;
+  const fix = rec.id ? OPENCCTV_COORD_FIXES[rec.id] : undefined;
   if (fix) {
     cam.lat = fix.lat;
     cam.lng = fix.lng;

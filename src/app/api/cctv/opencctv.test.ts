@@ -75,6 +75,52 @@ describe('applyCoordinateFix', () => {
   });
 });
 
+describe('applyCoordinateFix — Cimanggis–Cibitung (JORR 2) cluster', () => {
+  /* The MUDIK cameras on this toll are again placed from their names — "VMS
+     KM 25" and "GT Jatikarya 1" sat up to 3 km off the carriageway. Their km
+     markers continue from SS Cimanggis (49) via Jatikarya (52–53) and Nagrak
+     (56), and the fixes chain them to the OSM toll alignment. */
+  const row = (id: string): OpenCctvRecord => ({
+    id, name: id, city: 'Bekasi', country: 'ID',
+    lat: -6.366, lng: 106.964, // upstream's displaced cluster position
+    feed_url: 'https://streaming-cct.co.id/LiveApp/streams/x.m3u8',
+    feed_type: 'm3u8', source: 'mudik', active: 1,
+  });
+
+  it('moves "VMS KM 25" and "GT Jatikarya 1" onto the toll', () => {
+    const vms = applyCoordinateFix(row('mudik-BUJT-904'), mapRecord(row('mudik-BUJT-904'))!);
+    const gt = applyCoordinateFix(row('mudik-BUJT-1169'), mapRecord(row('mudik-BUJT-1169'))!);
+    expect(vms.lat).toBeCloseTo(-6.38911, 4);
+    expect(vms.lng).toBeCloseTo(106.91043, 4);
+    expect(gt.lat).toBeCloseTo(-6.38109, 4);
+    expect(gt.lng).toBeCloseTo(106.92128, 4);
+  });
+
+  it('keeps the whole cluster in chainage order along the toll', () => {
+    const order = ['mudik-BUJT-904', 'mudik-BUJT-1167', 'mudik-BUJT-1169', 'mudik-BUJT-1168',
+                   'mudik-BUJT-2183', 'mudik-BUJT-2184', 'mudik-BUJT-2186', 'mudik-BUJT-2188'];
+    let prevLng = -Infinity;
+    for (const id of order) {
+      const cam = applyCoordinateFix(row(id), mapRecord(row(id))!);
+      expect(cam.lng, `${id} out of order`).toBeGreaterThan(prevLng);
+      prevLng = cam.lng;
+    }
+  });
+
+  it('stays inside the Cimanggis–Cibitung corridor', () => {
+    for (const id of ['mudik-BUJT-903', 'mudik-BUJT-904', 'mudik-BUJT-905', 'mudik-BUJT-906',
+                      'mudik-BUJT-1166', 'mudik-BUJT-1167', 'mudik-BUJT-1168', 'mudik-BUJT-1169',
+                      'mudik-BUJT-1171', 'mudik-BUJT-2183', 'mudik-BUJT-2184', 'mudik-BUJT-2186',
+                      'mudik-BUJT-2188', 'mudik-BUJT-2503']) {
+      const cam = applyCoordinateFix(row(id), mapRecord(row(id))!);
+      expect(cam.lat, `${id} lat`).toBeGreaterThan(-6.40);
+      expect(cam.lat, `${id} lat`).toBeLessThan(-6.28);
+      expect(cam.lng, `${id} lng`).toBeGreaterThan(106.90);
+      expect(cam.lng, `${id} lng`).toBeLessThan(106.96);
+    }
+  });
+});
+
 describe('mapRecord', () => {
   it('maps an HLS camera to a stream', () => {
     expect(mapRecord(sampleRow)).toEqual({
