@@ -114,6 +114,7 @@ export default function IntelFeed({ data, onLocate }: IntelFeedProps) {
                             onLocate?.(item.coords[0], item.coords[1]);
                           }}
                           className="text-[var(--text-muted)] hover:text-[var(--cyan-primary)] transition-colors"
+                          title={item.coords_anchor ? `Approximate: centroid for "${item.coords_anchor}", not the event location` : 'Approximate location'}
                         >
                           <MapPin className="w-2.5 h-2.5" />
                         </button>
@@ -128,12 +129,14 @@ export default function IntelFeed({ data, onLocate }: IntelFeedProps) {
                       {item.title}
                     </h4>
 
-                    {/* Machine Assessment (if critical) */}
-                    {item.machine_assessment && (
+                    {/* Why the risk badge reads the way it does. Not an assessment:
+                        the keyword filter's own working, shown so the badge is
+                        read as a word count rather than a judgement. */}
+                    {item.keyword_assessment && (
                       <div className="mt-1.5 flex items-start gap-1.5 bg-red-950/20 border border-red-900/20 rounded px-2 py-1">
                         <Zap className="w-2.5 h-2.5 text-red-400 flex-shrink-0 mt-0.5" />
                         <span className="text-[10px] font-mono text-red-400/80 leading-relaxed">
-                          {item.machine_assessment}
+                          {item.keyword_assessment}
                         </span>
                       </div>
                     )}

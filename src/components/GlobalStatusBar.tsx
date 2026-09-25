@@ -168,6 +168,12 @@ export default function GlobalStatusBar() {
             <DocsIcon />
             <span className="text-[9px] font-bold tracking-[0.15em] uppercase">Docs</span>
           </Link>
+          {/* Data & privacy — what leaves this instance, and when */}
+          <Link href="/privacy" title="Data & Privacy" aria-label="Data and Privacy"
+            className="h-full px-3 hidden sm:flex items-center text-white/40 hover:text-white hover:bg-white/[0.04] border-r border-white/[0.04] transition-all duration-200"
+          >
+            <span className="text-[9px] font-bold tracking-[0.15em] uppercase">Privacy</span>
+          </Link>
         </div>
 
         {/* ── CENTER: Scrolling ticker ── */}

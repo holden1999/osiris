@@ -1,6 +1,6 @@
 import { stealthFetch } from '@/lib/stealthFetch';
 import { cachedSource } from '@/lib/sourceCache';
-import type { CctvCamera, CctvStreamType } from './types';
+import { proxiedImageUrl, type CctvCamera, type CctvStreamType } from './types';
 
 /**
  * OSIRIS — Asian cameras via the OpenCCTV directory.
@@ -49,6 +49,23 @@ const REGIONS: Record<string, { bounds: Bounds; cap: number }> = {
      the cap is never the binding constraint here; it is a guard, not a quota. */
   westasia: { bounds: { minLat: 5, maxLat: 56, minLng: 25, maxLng: 92 }, cap: 600 },
 };
+
+/**
+ * Hosts another module already fetches in full. The westasia box reaches west
+ * to 25°E, which takes in eastern Lithuania, and OpenCCTV republishes Via
+ * Lietuva's cameras — so without this each one lands on the map twice: once
+ * here, and once from lithuania.ts, which carries the whole live set.
+ */
+const COVERED_ELSEWHERE = ['eismoinfo.lt'];
+
+function coveredElsewhere(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return COVERED_ELSEWHERE.some(h => host === h || host.endsWith('.' + h));
+  } catch {
+    return false;
+  }
+}
 
 /** The index, as three parallel arrays. */
 interface MarkerIndex {
@@ -287,6 +304,11 @@ export function mapRecord(rec: OpenCctvRecord): CctvCamera | null {
 
   const url = rec.feed_url?.trim();
   if (!url) return null;
+  if (coveredElsewhere(url)) return null;
+  /* Malaysia's LLM cameras point at the operator's own "camera offline"
+     placeholder while a camera is down, and that path 404s. A pin that can
+     only ever show a broken image is worse than no pin. */
+  if (/\/offcam\//i.test(url)) return null;
 
   const kind = streamKind(rec.feed_type);
   if (!kind) return null;
@@ -310,7 +332,7 @@ export function mapRecord(rec: OpenCctvRecord): CctvCamera | null {
     city: rec.city?.trim() || '',
     country: rec.country?.trim() || '',
     /* A still is a feed_url; everything else is a stream the player picks up. */
-    ...(kind === 'jpg' ? { feed_url: url } : { stream_url: url, stream_type: kind }),
+    ...(kind === 'jpg' ? { feed_url: proxiedImageUrl(url) } : { stream_url: url, stream_type: kind }),
     source: rec.source?.trim() ? `OpenCCTV / ${rec.source.trim()}` : 'OpenCCTV',
   };
 }

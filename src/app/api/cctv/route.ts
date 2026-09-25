@@ -32,6 +32,8 @@ import { fetchThailandCameras } from './thailand';
 import { fetchIndonesiaCameras } from './indonesia';
 import { fetchAsiaLiveCameras } from './asia-live';
 import { fetchNewZealandCameras } from './newzealand';
+import { fetchLithuaniaCameras } from './lithuania';
+import { fetchEdmontonCameras } from './edmonton';
 import { fetchOregonCameras } from './oregon';
 import { fetchMichiganCameras } from './michigan';
 import { fetchIndianaCameras } from './indiana';
@@ -48,6 +50,12 @@ import {
   fetchAfricaLiveCameras,
   fetchEuropeLiveCameras,
 } from './world-live';
+import {
+  fetchNlPublicWebcams,
+  fetchEuropePublicWebcams,
+  fetchAmericasPublicWebcams,
+  fetchRestPublicWebcams,
+} from './public-webcams';
 
 /**
  * OSIRIS — Worldwide CCTV Camera API v2
@@ -506,6 +514,8 @@ const RAW_REGION_FETCHERS: Record<string, RegionFetcher> = {
   'indonesia': fetchIndonesiaCameras,
   'asia-live': fetchAsiaLiveCameras,
   'newzealand': fetchNewZealandCameras,
+  'lithuania': fetchLithuaniaCameras,
+  'edmonton': fetchEdmontonCameras,
   'oregon': fetchOregonCameras,
   'michigan': fetchMichiganCameras,
   'indiana': fetchIndianaCameras,
@@ -522,6 +532,13 @@ const RAW_REGION_FETCHERS: Record<string, RegionFetcher> = {
   'latam-live': fetchLatamLiveCameras,
   'africa-live': fetchAfricaLiveCameras,
   'europe-live': fetchEuropeLiveCameras,
+  /* Webcams their operators broadcast publicly. Registered here
+     only — fetchEuropeCameras must not call these too, or every one of them
+     lands on the map twice (GET concatenates regions without deduping on id). */
+  'public-webcams-nl': fetchNlPublicWebcams,
+  'public-webcams-europe': fetchEuropePublicWebcams,
+  'public-webcams-americas': fetchAmericasPublicWebcams,
+  'public-webcams-rest': fetchRestPublicWebcams,
 };
 
 /**
@@ -807,6 +824,7 @@ function getRegionsForBounds(lat: number, lng: number, radius: number): string[]
   if (lat > 31.3 && lat < 37.1 && lng > -115.0 && lng < -109.0) regions.push('arizona');
   // Canada
   if (lat > 42 && lat < 70 && lng > -141 && lng < -52) regions.push('canada');
+  if (lat > 53.3 && lat < 53.8 && lng > -114.0 && lng < -113.2) regions.push('edmonton');
   // Europe
   const inBulgaria = lat > 41 && lat < 44.5 && lng > 22 && lng < 29.5;
   const inGreece = lat > 34.5 && lat < 41.8 && lng > 19 && lng < 30;
@@ -822,9 +840,10 @@ function getRegionsForBounds(lat: number, lng: number, radius: number): string[]
   const inSpain = lat > 27 && lat < 43.8 && lng > -18.2 && lng < 4.4;
   const inPoland = lat > 49.0 && lat < 55.0 && lng > 14.1 && lng < 24.1;
   const inFinland = lat > 59.5 && lat < 70.1 && lng > 20 && lng < 31.6;
+  const inLithuania = lat > 53.8 && lat < 56.5 && lng > 20.9 && lng < 26.9;
   const inIceland = lat > 63.0 && lat < 67.0 && lng > -25.0 && lng < -13.0;
   const inBalkans = inBulgaria || inGreece || inSerbia || inMacedonia || inRomania || inTurkey;
-  const inWesternEurope = inItaly || inCzechia || inSlovakia || inGermany || inFrance || inSpain || inPoland || inFinland || inIceland;
+  const inWesternEurope = inItaly || inCzechia || inSlovakia || inGermany || inFrance || inSpain || inPoland || inFinland || inIceland || inLithuania;
 
   if (lat > 35 && lat < 72 && lng > -11 && lng < 40 && !inBalkans && !inWesternEurope) {
     regions.push('europe');
@@ -844,6 +863,7 @@ function getRegionsForBounds(lat: number, lng: number, radius: number): string[]
   if (inPoland) regions.push('poland');
   if (inFinland) regions.push('finland');
   if (inIceland) regions.push('iceland');
+  if (inLithuania) regions.push('lithuania');
 
   // Middle East
   const inMiddleEast = lat > 29 && lat < 34.5 && lng > 34 && lng < 36.5;
@@ -887,6 +907,14 @@ function getRegionsForBounds(lat: number, lng: number, radius: number): string[]
   if (lat > -35 && lat < 36 && lng > -26 && lng < 57) regions.push('africa-live');
   // European gaps (Azores in the west through northern Norway)
   if (lat > 35 && lat < 72 && lng > -32 && lng < 32) regions.push('europe-live');
+
+  /* Public webcams. The Dutch box is the one netherlands.ts filters on; the other
+     three are drawn round what those arrays actually hold, Canaries and Nordkapp
+     included, rather than round the continents in the abstract. */
+  if (lat > 50.7 && lat < 53.7 && lng > 3.3 && lng < 7.3) regions.push('public-webcams-nl');
+  if (lat > 27 && lat < 72 && lng > -18 && lng < 31) regions.push('public-webcams-europe');
+  if (lat > 11 && lat < 52 && lng > -124 && lng < -59) regions.push('public-webcams-americas');
+  if (lat > -35 && lat < 62 && lng > 30 && lng < 152) regions.push('public-webcams-rest');
 
   return regions.length > 0 ? regions : ['uk', 'us-east']; // Default fallback
 }

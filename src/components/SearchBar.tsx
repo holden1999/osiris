@@ -22,42 +22,22 @@ interface SearchResult {
 interface SearchBarProps {
   onLocate: (lat: number, lng: number, zoom?: number) => void;
   alwaysExpanded?: boolean;
+  /** Where the map is looking. Results near it rank first, as in Directions. */
+  center?: { lat: number; lng: number } | null;
 }
 
 // Map Nominatim result types to appropriate zoom levels
-function getZoomForType(type: string, category: string, boundingbox?: string[]): number {
-  // If we have a bounding box, use it to estimate zoom
-  if (boundingbox && boundingbox.length === 4) {
-    const latDiff = Math.abs(parseFloat(boundingbox[1]) - parseFloat(boundingbox[0]));
-    const lngDiff = Math.abs(parseFloat(boundingbox[3]) - parseFloat(boundingbox[2]));
-    const maxDiff = Math.max(latDiff, lngDiff);
-    // Rough zoom estimation from bounding box span
-    if (maxDiff < 0.002) return 19;  // building / address
-    if (maxDiff < 0.01) return 17;   // street block
-    if (maxDiff < 0.05) return 15;   // neighborhood
-    if (maxDiff < 0.2) return 13;    // small town
-    if (maxDiff < 1) return 11;      // city
-    if (maxDiff < 5) return 8;       // region
-    if (maxDiff < 20) return 6;      // country
-    return 4;                        // continent
-  }
+/** How close to fly for each kind /api/geosearch returns. */
+const ZOOM_BY_KIND: Record<string, number> = {
+  address: 18,
+  street: 16,
+  poi: 16,
+  city: 12,
+  region: 8,
+  country: 5,
+  place: 13,
+};
 
-  // Fallback: type-based zoom
-  if (['house', 'building', 'address', 'shop', 'amenity', 'office'].includes(type)) return 18;
-  if (['road', 'street', 'highway', 'path', 'residential', 'tertiary', 'secondary', 'primary'].includes(type)) return 17;
-  if (['neighbourhood', 'quarter', 'suburb', 'hamlet', 'isolated_dwelling'].includes(type)) return 15;
-  if (['village', 'town', 'borough'].includes(type)) return 14;
-  if (['city', 'municipality'].includes(type)) return 12;
-  if (['county', 'state_district', 'state', 'province'].includes(type)) return 8;
-  if (['country'].includes(type)) return 5;
-  if (['continent'].includes(type)) return 3;
-  if (category === 'boundary') return 8;
-  if (category === 'place') return 13;
-  if (category === 'highway') return 17;
-  if (category === 'building') return 18;
-  if (category === 'amenity') return 17;
-  return 13; // safe default
-}
 
 // Icon for result type
 function getResultIcon(type: string, category: string) {
@@ -86,7 +66,7 @@ function formatLabel(displayName: string): { primary: string; secondary: string 
   };
 }
 
-export default function SearchBar({ onLocate, alwaysExpanded = false }: SearchBarProps) {
+export default function SearchBar({ onLocate, alwaysExpanded = false, center = null }: SearchBarProps) {
   const [open, setOpen] = useState(alwaysExpanded);
   const [value, setValue] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -94,6 +74,7 @@ export default function SearchBar({ onLocate, alwaysExpanded = false }: SearchBa
   const [selectedIdx, setSelectedIdx] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Focus input when opened
@@ -162,31 +143,43 @@ export default function SearchBar({ onLocate, alwaysExpanded = false }: SearchBa
     if (timerRef.current) clearTimeout(timerRef.current);
     if (q.trim().length < 2) { setResults([]); return; }
 
+    /* Through our own route, never straight to Nominatim: one cache and one
+       budget for every visitor instead of one search per person per keystroke.
+       See lib/nominatim.ts — the public instance allows one request a second
+       across everybody using it, and this box was a large part of us being
+       well over that. The debounce is longer for the same reason. */
     timerRef.current = setTimeout(async () => {
+      /* The same two things Directions does, which is why its results were
+         better. It sends where the map is looking, so "Notre-Dame" over
+         Montreal is the basilica rather than a village in Normandy. And it
+         abandons the lookup for an earlier keystroke, so a slow reply for
+         "Par" can never land after the one for "Paris" and replace it. */
+      abortRef.current?.abort();
+      const ctrl = new AbortController();
+      abortRef.current = ctrl;
+
       setLoading(true);
       try {
-        // Use addressdetails=1 for better type detection and limit=8 for more results
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=8&addressdetails=1&extratags=1`,
-          { headers: { 'Accept-Language': 'en', 'User-Agent': 'OSIRIS-Intelligence-Platform/1.0' } }
-        );
+        const bias = center ? `&lat=${center.lat}&lng=${center.lng}` : '';
+        const res = await fetch(`/api/geosearch?q=${encodeURIComponent(q)}${bias}`, { signal: ctrl.signal });
         const data = await res.json();
-        setResults(data.map((r: any) => {
-          const zoom = getZoomForType(r.type, r.class, r.boundingbox);
-          return {
-            label: r.display_name,
-            lat: parseFloat(r.lat),
-            lng: parseFloat(r.lon),
-            type: r.type || 'unknown',
-            importance: r.importance || 0,
-            category: r.class || 'unknown',
-            zoomLevel: zoom,
-          };
-        }));
-      } catch { setResults([]); }
-      setLoading(false);
-    }, 300);
-  }, []);
+        if (ctrl.signal.aborted) return;
+        setResults((data.results || []).map((r: { name: string; context: string; lat: number; lng: number; kind: string; score?: number }) => ({
+          label: [r.name, r.context].filter(Boolean).join(', '),
+          lat: r.lat,
+          lng: r.lng,
+          type: r.kind || 'unknown',
+          importance: r.score ?? 0,
+          category: r.kind || 'unknown',
+          zoomLevel: ZOOM_BY_KIND[r.kind] ?? 13,
+        })));
+      } catch {
+        // An abandoned lookup is not a failure; the newer one owns the list.
+        if (!ctrl.signal.aborted) setResults([]);
+      }
+      if (!ctrl.signal.aborted) setLoading(false);
+    }, 500);
+  }, [center]);
 
   const handleSelect = (r: SearchResult) => {
     onLocate(r.lat, r.lng, r.zoomLevel);
@@ -301,6 +294,18 @@ export default function SearchBar({ onLocate, alwaysExpanded = false }: SearchBa
               </button>
             );
           })}
+          {/* Results come from OpenStreetMap, through Photon and Nominatim. */}
+          <div className="px-3 py-1.5 border-t border-[var(--border-secondary)] text-[8.5px] font-mono tracking-wider text-[var(--text-muted)]">
+            PLACES ©{' '}
+            <a
+              href="https://www.openstreetmap.org/copyright"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-[var(--gold-primary)]"
+            >
+              OPENSTREETMAP CONTRIBUTORS
+            </a>
+          </div>
         </div>
       )}
     </div>

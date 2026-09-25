@@ -4,10 +4,11 @@ import { buildGeometry, closeRing, drawReducer, initialDrawState, measure, type 
 import { useEffect, useRef, useState, useCallback, memo } from 'react';
 import * as maplibregl from 'maplibre-gl';
 import { installTerrainTileProtocol } from '@/lib/terrain-tiles';
-import { createSatelliteLayer, parseColor, type SatPoint } from '@/lib/satellite-layer';
+import { createSatelliteLayer, parseColor, SAT_MAX_ZOOM, type SatPoint } from '@/lib/satellite-layer';
 import { MAP_DEFAULTS, MAP_PALETTE_KEYS, readMapPalette, satColorFor, type MapPalette } from '@/lib/map-palette';
 import { STYLE_EVENT } from '@/lib/style-tokens';
 import { arrivalBeacons } from '@/lib/malware-intel';
+import { ALERT_KINDS, timeAgo, type AlertKind } from '@/lib/alert-digest';
 import SatelliteCard, { type SatelliteDetail } from '@/components/SatelliteCard';
 import CctvPreviews, { type PreviewCamera } from '@/components/CctvPreviews';
 import MapControls from '@/components/MapControls';
@@ -36,7 +37,10 @@ interface OsirisMapProps {
   onMouseCoords?: (coords: { lat: number; lng: number }) => void;
   onRightClick?: (coords: { lat: number; lng: number }) => void;
   onViewStateChange?: (vs: { zoom: number; latitude: number }) => void;
-  flyToLocation?: { lat: number; lng: number; zoom?: number; ts: number } | null;
+  /** `alertId` also opens that Live Alert's pin once the camera arrives. */
+  flyToLocation?: { lat: number; lng: number; zoom?: number; alertId?: string; ts: number } | null;
+  /** Which Live Alerts to pin — the reports the feed is showing. Null pins them all. */
+  alertPinIds?: string[] | null;
   projection?: 'mercator' | 'globe';
   terrainEnabled?: boolean;
   terrainRetry?: number;
@@ -105,10 +109,67 @@ function computeSolarTerminator(): [number, number][] {
 
 const EMPTY_FC = { type: 'FeatureCollection' as const, features: [] };
 
-function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightClick, onViewStateChange, flyToLocation, projection = 'globe', terrainEnabled = false, terrainRetry = 0, terrainFocus = 0, onTerrainStatusChange, mapStyle = 'dark', sweepData, scanTargets = [], demoMode = false, theme = 'core', drawnPolygons = [], arcgisLayers = [], drawMode = null, onDrawComplete, onDrawProgress, onDrawCancel, drawCommand = null, onMapCenter, route = null, userLocation = null, followUser = false, onFollowInterrupt, navigating = false, aircraftAirports = {} }: OsirisMapProps) {
+/** A colour, or an expression for one, as addLayer takes it. */
+type LayerColor = NonNullable<Extract<Parameters<maplibregl.Map['addLayer']>[0], { type: 'circle' }>['paint']>['circle-color'];
+
+/** A Live Alerts report as /api/news sends it — only the fields a pin reads. */
+interface PinnedReport {
+  id: string;
+  alert_kind?: string;
+  title: string;
+  source_name: string;
+  lean?: string | null;
+  published: string;
+  link?: string | null;
+  coords?: [number, number] | null;
+  place?: { name: string; label: string; precision: string } | null;
+  media?: { kind?: string; video?: string | null; thumb?: string | null; duration?: string | null } | null;
+}
+
+/** A report posted this recently gets the pulsing ring. */
+const ALERT_FRESH_MS = 15 * 60_000;
+
+/** Two right-clicks count as one double right-click this close in time… */
+const DOUBLE_RIGHT_MS = 500;
+/** …and this close on screen, so a second click elsewhere starts afresh. */
+const DOUBLE_RIGHT_SLOP_PX = 12;
+
+/** What a pin carries: flat, as map feature properties must be. */
+interface AlertPinProps {
+  id: string;
+  kind: AlertKind;
+  /** Reports pinned to this same place, this one included. */
+  stack: number;
+  /** Posted in the last quarter of an hour. */
+  fresh: boolean;
+  title: string;
+  source_name: string;
+  lean: string;
+  published: string;
+  link: string;
+  place_name: string;
+  place_label: string;
+  precision: string;
+  media_kind: string;
+  video: string;
+  thumb: string;
+  duration: string;
+}
+
+interface AlertPinFeature {
+  type: 'Feature';
+  geometry: { type: 'Point'; coordinates: [number, number] };
+  properties: AlertPinProps;
+}
+
+function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightClick, onViewStateChange, flyToLocation, alertPinIds = null, projection = 'globe', terrainEnabled = false, terrainRetry = 0, terrainFocus = 0, onTerrainStatusChange, mapStyle = 'dark', sweepData, scanTargets = [], demoMode = false, theme = 'core', drawnPolygons = [], arcgisLayers = [], drawMode = null, onDrawComplete, onDrawProgress, onDrawCancel, drawCommand = null, onMapCenter, route = null, userLocation = null, followUser = false, onFollowInterrupt, navigating = false, aircraftAirports = {} }: OsirisMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
+  /* The Live Alert pins currently drawn, and the opener for one of them, so
+     the feed's locate button can land on a pin and open it. */
+  const alertPinsRef = useRef<AlertPinFeature[]>([]);
+  const openAlertPinRef = useRef<((id: string) => void) | null>(null);
   const [mapReady, setMapReady] = useState(false);
 
   // Do not replay an earlier explicit zoom request after theme/retry remounts.
@@ -249,7 +310,17 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       container,
       style: styleUrl,
       center: [25.48, 42.70] as [number, number], zoom: 6.5, minZoom: 1.5, maxZoom: 18,
-      attributionControl: false as const,
+      /* The basemap is CARTO's, drawn from OpenStreetMap, and the places on it
+         are searched and named through OpenStreetMap too. Both have to be
+         credited on the map itself; this was switched off, which is half of
+         what Nominatim's operators asked us to put right (issue #16). It is
+         collapsed by default so it costs a corner icon, not the view. */
+      attributionControl: {
+        compact: true,
+        // The style credits CARTO and OSM for the map; this credits OSM for the
+        // search results, place names and pins that come from Nominatim.
+        customAttribution: 'Geocoding © OpenStreetMap contributors',
+      } as const,
       maxPitch: 85,
       transformRequest: (url: string) => {
         // Route all CARTO CDN requests through the internal Next.js proxy API
@@ -291,7 +362,12 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
 
     map.on('load', () => {
       mapRef.current = map;
-      
+
+      /* Measure the container once the layout has settled. The constructor
+         may have read it before it had a size, and a map that starts at the
+         400x300 fallback never recovers on its own. */
+      map.resize();
+
       // Theme colors
       const isGhost = theme === 'ghost';
       const phantomPurple = '#B388FF';
@@ -321,7 +397,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       createDot(map, 'dot-fire', isGhost ? phantomPurple : '#E65100', 10);
       createDot(map, 'dot-cctv', cameraColor, 10);
 
-      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','conflict-zones', 'war-alerts-targets', 'war-alerts-lines', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'malware-nodes', 'malware-new', 'network-mesh', 'cyber-arcs', 'cyber-heads', 'cyber-impacts', 'gdelt-events', 'cf-outages', 'cf-attacks'];
+      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','conflict-zones', 'war-alerts-targets', 'war-alerts-lines', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'malware-nodes', 'malware-new', 'network-mesh', 'cyber-heads', 'gdelt-events', 'cf-outages', 'cf-attacks', 'alert-pins'];
       sources.forEach(s => map.addSource(s, { type: 'geojson', data: EMPTY_FC }));
 
       // ── FLIGHT ROUTE VISUALIZATION SOURCES & LAYERS ──
@@ -460,31 +536,15 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'line-opacity': 0.4,
       }});
 
-      // ══ LIVE CYBER ATTACKS — dark wire network (source → target) ══
-      map.addLayer({ id: 'cyber-arcs-atmo', type: 'line', source: 'cyber-arcs', paint: {
-        'line-color': '#000000', 'line-width': ['interpolate',['linear'],['zoom'], 1,4, 5,7, 10,12],
-        'line-opacity': 0.12, 'line-blur': 6,
-      }});
-      map.addLayer({ id: 'cyber-arcs-glow', type: 'line', source: 'cyber-arcs', paint: {
-        'line-color': '#111111', 'line-width': ['interpolate',['linear'],['zoom'], 1,2, 5,3.5, 10,6],
-        'line-opacity': 0.3, 'line-blur': 2,
-      }});
-      map.addLayer({ id: 'cyber-arcs-core', type: 'line', source: 'cyber-arcs', paint: {
-        'line-color': '#000000', 'line-width': ['interpolate',['linear'],['zoom'], 1,0.8, 5,1.4, 10,2.2],
-        'line-opacity': 0.7,
-      }});
-      // Animated dashed flow line — fast marching ants in black
-      map.addLayer({ id: 'cyber-arcs-flow', type: 'line', source: 'cyber-arcs', paint: {
-        'line-color': '#1a1a1a', 'line-width': ['interpolate',['linear'],['zoom'], 1,1.0, 5,1.8, 10,3],
-        'line-opacity': 0.55, 'line-dasharray': [2, 3],
-      }});
-      map.addLayer({ id: 'cyber-impacts', type: 'circle', source: 'cyber-impacts', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,6, 5,12, 10,18],
-        'circle-color': '#000000', 'circle-opacity': 0.08, 'circle-blur': 0.6,
-      }});
+      /* ══ BOTNET C2 INFRASTRUCTURE — one dot per listed server ══
+         Feodo Tracker lists where a C2 is hosted and whether it still
+         answers. It records no attacker, no victim and no attack, so there is
+         nothing here to draw an arc between: a dot at the hosting country,
+         coloured by the reported status, is the whole of what is observed. */
       map.addLayer({ id: 'cyber-heads', type: 'circle', source: 'cyber-heads', paint: {
         'circle-radius': ['interpolate',['linear'],['zoom'], 1,2.5, 5,4, 10,6],
-        'circle-color': '#111111', 'circle-opacity': 0.95,
+        'circle-color': ['case', ['==', ['get','status'], 'online'], '#FF6D00', '#555555'],
+        'circle-opacity': 0.95,
         'circle-stroke-width': 1.5, 'circle-stroke-color': '#333', 'circle-stroke-opacity': 0.9,
       }});
       map.addLayer({ id: 'cyber-labels', type: 'symbol', source: 'cyber-heads', minzoom: 3, layout: {
@@ -648,6 +708,38 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'text-offset': [0, 1.8], 'text-max-width': 12, 'text-allow-overlap': false,
       }, paint: { 'text-color': '#EC407A', 'text-halo-color': '#000', 'text-halo-width': 1, 'text-opacity': 0.8 }});
 
+      // Live Alert pins — a report at the place it names, coloured by what it describes
+      const alertColor: LayerColor = ['match', ['get','kind'], 'rocket', ALERT_KINDS.rocket.color, 'event', ALERT_KINDS.event.color, ALERT_KINDS.news.color];
+      map.addLayer({ id: 'alert-pin-glow', type: 'circle', source: 'alert-pins', paint: {
+        'circle-radius': ['interpolate',['linear'],['zoom'], 1,7, 6,14, 10,22],
+        'circle-color': alertColor, 'circle-opacity': 0.16, 'circle-blur': 0.8,
+      }});
+      map.addLayer({ id: 'alert-pin-dots', type: 'circle', source: 'alert-pins', paint: {
+        'circle-radius': ['interpolate',['linear'],['zoom'], 1,3.5, 6,6, 10,8],
+        'circle-color': alertColor,
+        // A region is placed less exactly than a town, so it is drawn as a ring.
+        'circle-opacity': ['case', ['==', ['get','precision'], 'region'], 0.15, 0.95],
+        'circle-stroke-width': 1.5,
+        'circle-stroke-color': ['match', ['get','precision'], 'region', alertColor, '#0A0A0A'] as LayerColor,
+      }});
+      // A report just in, and the pin a popup is open on, each get a ring.
+      map.addLayer({ id: 'alert-pin-pulse', type: 'circle', source: 'alert-pins', filter: ['==', ['get','fresh'], true], paint: {
+        'circle-radius': 9, 'circle-color': 'transparent',
+        'circle-stroke-color': alertColor as never, 'circle-stroke-width': 1.5, 'circle-stroke-opacity': 0.7,
+      }});
+      map.addLayer({ id: 'alert-pin-selected', type: 'circle', source: 'alert-pins', filter: ['==', ['get','id'], ''], paint: {
+        'circle-radius': 13, 'circle-color': 'transparent',
+        'circle-stroke-color': '#FFFFFF', 'circle-stroke-width': 1.5, 'circle-stroke-opacity': 0.85,
+      }});
+      map.addLayer({ id: 'alert-pin-label', type: 'symbol', source: 'alert-pins', minzoom: 5, layout: {
+        // "Riyadh ·3" when three reports name the same town.
+        'text-field': ['case', ['>', ['get','stack'], 1],
+          ['concat', ['get','place_name'], ' ·', ['to-string', ['get','stack']]],
+          ['get','place_name']],
+        'text-size': 10, 'text-font': ['Open Sans Bold'],
+        'text-offset': [0, 1.2], 'text-anchor': 'top', 'text-max-width': 12, 'text-allow-overlap': false,
+      }, paint: { 'text-color': alertColor, 'text-halo-color': '#000', 'text-halo-width': 1.2, 'text-opacity': 0.9 }});
+
       // ══ IP SWEEP — Neighborhood device visualization ══
       map.addLayer({ id: 'sweep-connections', type: 'line', source: 'ip-sweep-connections', paint: {
         'line-color': ['get', 'color'], 'line-width': 1, 'line-opacity': 0.3, 'line-dasharray': [2, 4],
@@ -810,7 +902,30 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         onMouseCoords?.({ lat: e.lngLat.lat, lng: e.lngLat.lng });
       }
     });
-    map.on('contextmenu', e => { e.preventDefault(); onRightClick?.({ lat: e.lngLat.lat, lng: e.lngLat.lng }); });
+    /* The region dossier opens on a double right-click: two within
+       DOUBLE_RIGHT_MS and a few pixels of each other. A single right-click
+       was too easy to make by accident — it opened a panel and set off a
+       place lookup and a country's worth of Wikidata requests. A touch
+       long-press is already deliberate, so on a phone one still opens it;
+       asking for two there would make it all but unreachable. */
+    let lastRightClick: { at: number; x: number; y: number } | null = null;
+    map.on('contextmenu', e => {
+      e.preventDefault();
+      const open = () => onRightClick?.({ lat: e.lngLat.lat, lng: e.lngLat.lng });
+      if ((e.originalEvent as PointerEvent).pointerType === 'touch') { open(); return; }
+
+      const now = performance.now();
+      const { x, y } = e.point;
+      const isSecond = lastRightClick !== null
+        && now - lastRightClick.at < DOUBLE_RIGHT_MS
+        && Math.hypot(x - lastRightClick.x, y - lastRightClick.y) < DOUBLE_RIGHT_SLOP_PX;
+      if (isSecond) {
+        lastRightClick = null;
+        open();
+      } else {
+        lastRightClick = { at: now, x, y };
+      }
+    });
     const reportViewState = () => { const c = map.getCenter(); onViewStateChange?.({ zoom: map.getZoom(), latitude: c.lat }); };
     map.on('load', reportViewState);
     map.on('moveend', reportViewState);
@@ -996,7 +1111,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       'gdelt-dots','weather-dots','infra-dots','maritime-dots','choke-dots','news-dots',
       'balloon-dots','rad-dots','ship-dots','sweep-device-dots','scan-targets-dots',
       'sdk-sea','sdk-air','sdk-intel','malware-dots','cyber-heads','gdelt-events-dots',
-      'cf-outage-dots','cf-attack-dots','flight-dots','military-dots','jet-dots','private-dots']);
+      'cf-outage-dots','cf-attack-dots','flight-dots','military-dots','jet-dots','private-dots','alert-pin-dots']);
 
     // Satellites are picked on the GPU: the pick pass runs the same vertex
     // shader as the visible one, so the target is always exactly where the
@@ -1292,36 +1407,41 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       });
     });
 
-    // ⚡ Live Cyber Attack Arcs (click on flying heads) ⚡
+    /* ── Botnet C2 infrastructure (abuse.ch Feodo Tracker) ──
+       Every field below is read off the blocklist row. The popup used to lead
+       with a randomly chosen attack verb and a fabricated attacker origin;
+       what a row actually supports is an address, a family, a hosting
+       country and two observation timestamps. */
     map.on('click', 'cyber-heads', e => {
       if (!e.features?.length) return;
       const p = e.features[0].properties as any;
       const coords = (e.features[0].geometry as any).coordinates;
-      const sevColor = (p.severity || 5) >= 8 ? '#FF1744' : (p.severity || 5) >= 6 ? '#FF6D00' : '#FFD600';
-      const sevLabel = (p.severity || 5) >= 8 ? 'CRITICAL' : (p.severity || 5) >= 6 ? 'HIGH' : 'MEDIUM';
-      popup(coords, `<div style="${pStyle}border:1px solid ${sevColor}40;box-shadow:inset 0 0 20px ${sevColor}10, 0 0 15px ${sevColor}15;">
-        <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid ${sevColor}30;padding-bottom:6px;margin-bottom:8px;">
-          <div style="color:${sevColor};font-size:12px;font-weight:700;letter-spacing:0.12em;text-shadow:0 0 6px ${sevColor}60;">⚡ ${htmlEsc((p.action || 'ATTACK').toUpperCase())}</div>
-          <div style="font-size:8px;padding:2px 6px;border-radius:3px;font-weight:700;letter-spacing:0.1em;background:${sevColor}20;color:${sevColor};border:1px solid ${sevColor}50;">${sevLabel}</div>
+      const online = p.status === 'online';
+      const c = online ? '#FF6D00' : '#8A8880';
+      const row = (label: string, value: string, color = '#E8E6E0', mono = false) =>
+        `<div><span style="color:#5C5A54;font-size:7px;letter-spacing:0.1em;">${label}</span><br/><span style="color:${color};${mono ? 'font-family:monospace;' : ''}">${value}</span></div>`;
+      popup(coords, `<div style="${pStyle}border:1px solid ${c}40;">
+        <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid ${c}30;padding-bottom:6px;margin-bottom:8px;">
+          <div style="color:${c};font-size:12px;font-weight:700;letter-spacing:0.12em;">BOTNET C2 SERVER</div>
+          <div style="font-size:8px;padding:2px 6px;border-radius:3px;font-weight:700;letter-spacing:0.1em;background:${c}20;color:${c};border:1px solid ${c}50;">${htmlEsc((p.status || 'unknown').toUpperCase())}</div>
         </div>
-        <div style="color:#E8E6E0;font-size:11px;font-weight:bold;margin-bottom:10px;">${htmlEsc(p.malware || 'Unknown Payload')}</div>
+        <div style="color:#E8E6E0;font-size:11px;font-weight:bold;margin-bottom:10px;">${htmlEsc(p.malware || 'Family not reported')}</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:9px;margin-bottom:8px;background:rgba(0,0,0,0.35);padding:8px;border-radius:4px;border:1px solid rgba(255,255,255,0.04);">
-          <div><span style="color:#5C5A54;font-size:7px;letter-spacing:0.1em;">SOURCE ORIGIN</span><br/><span style="color:#FF5252;font-family:monospace;">${p.src_lat || '?'}°, ${p.src_lng || '?'}°</span></div>
-          <div><span style="color:#5C5A54;font-size:7px;letter-spacing:0.1em;">TARGET</span><br/><span style="color:#00E5FF;font-family:monospace;">${htmlEsc(p.target_ip || '—')}</span></div>
-          <div><span style="color:#5C5A54;font-size:7px;letter-spacing:0.1em;">TARGET COUNTRY</span><br/><span style="color:#E8E6E0;">${htmlEsc(p.target_country || '—')}</span></div>
-          <div><span style="color:#5C5A54;font-size:7px;letter-spacing:0.1em;">PORT</span><br/><span style="color:#FFD600;font-family:monospace;">${p.port || '—'}</span></div>
+          ${row('C2 ADDRESS', htmlEsc(p.ip || '—'), '#00E5FF', true)}
+          ${row('PORT', htmlEsc(String(p.port ?? '—')), '#FFD600', true)}
+          ${row('HOSTED IN', htmlEsc(p.country || 'Not reported'))}
+          ${row('AS', htmlEsc(p.as_number ? `AS${p.as_number}` : '—'), '#E8E6E0', true)}
+          ${row('FIRST SEEN', htmlEsc(p.first_seen || 'Not reported'))}
+          ${row('LAST ONLINE', htmlEsc(p.last_online || 'Not reported'))}
         </div>
-        <div style="display:flex;gap:6px;align-items:center;">
-          <div style="flex:1;height:3px;border-radius:2px;background:linear-gradient(90deg, ${sevColor}00, ${sevColor});opacity:0.5;"></div>
-          <span style="font-size:7px;color:#5C5A54;letter-spacing:0.15em;">SEVERITY ${p.severity || '?'}/10</span>
-          <div style="flex:1;height:3px;border-radius:2px;background:linear-gradient(90deg, ${sevColor}, ${sevColor}00);opacity:0.5;"></div>
-        </div>
-        <div style="margin-top:8px;font-size:7px;color:#5C5A54;text-align:center;letter-spacing:0.1em;">SOURCE: ABUSE.CH FEODO TRACKER</div>
+        ${p.hostname ? `<div style="font-size:9px;color:#8A8880;margin-bottom:8px;font-family:monospace;word-break:break-all;">${htmlEsc(p.hostname)}</div>` : ''}
+        <div style="font-size:8px;color:#5C5A54;line-height:1.5;margin-bottom:8px;">Blocklist entry, not an observed attack. Marker sits at the hosting country's centroid, not the host's location.</div>
+        <div style="font-size:7px;color:#5C5A54;text-align:center;letter-spacing:0.1em;">SOURCE: <a href="${urlSafe(p.source_url || 'https://feodotracker.abuse.ch/browse/')}" target="_blank" style="color:${c};text-decoration:underline;">ABUSE.CH FEODO TRACKER ↗</a></div>
       </div>`);
     });
 
     // ── Generic hover for clickables ──
-    ['conflict-icons','cctv-dots','eq-circles','fires-heat','gdelt-dots','weather-dots','infra-dots','maritime-dots','choke-dots','news-dots','balloon-dots','rad-dots','ship-dots','sweep-device-dots','scan-targets-dots','sdk-sea','sdk-sea-glow','sdk-sea-atmo','sdk-air','sdk-air-glow','sdk-air-atmo','sdk-intel','sdk-intel-glow','sdk-intel-atmo','malware-dots','cyber-heads','gdelt-events-dots','cf-outage-dots','cf-attack-dots'].forEach(layer => {
+    ['conflict-icons','cctv-dots','eq-circles','fires-heat','gdelt-dots','weather-dots','infra-dots','maritime-dots','choke-dots','news-dots','balloon-dots','rad-dots','ship-dots','sweep-device-dots','scan-targets-dots','sdk-sea','sdk-sea-glow','sdk-sea-atmo','sdk-air','sdk-air-glow','sdk-air-atmo','sdk-intel','sdk-intel-glow','sdk-intel-atmo','malware-dots','cyber-heads','gdelt-events-dots','cf-outage-dots','cf-attack-dots','alert-pin-dots'].forEach(layer => {
       map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
     });
@@ -1565,7 +1685,100 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       });
     });
 
-    return () => { cancelAnimationFrame(hoverFrame); map.remove(); mapRef.current = null; };
+    // ── Live Alert pins: the report, the place it names, and its footage ──
+    const alertPopupHtml = (reports: AlertPinProps[]) => {
+      const [p, ...rest] = reports;
+      const c = (ALERT_KINDS[p.kind as AlertKind] ?? ALERT_KINDS.news).color;
+      const label = (ALERT_KINDS[p.kind as AlertKind] ?? ALERT_KINDS.news).label;
+      const link = urlSafe(p.link);
+      const video = urlSafe(p.video);
+      const thumb = urlSafe(p.thumb);
+      /* Footage plays in place where Telegram serves the file; a video it
+         only shows in the app gets its preview and a way through to it. */
+      const media = video !== '#'
+        ? `<video src="${htmlEsc(video)}"${thumb !== '#' ? ` poster="${htmlEsc(thumb)}"` : ''} controls playsinline preload="none" style="display:block;width:100%;max-height:180px;margin-top:10px;border-radius:6px;background:#000;"></video>`
+        : thumb !== '#'
+          ? `<a href="${htmlEsc(link)}" target="_blank" rel="noopener noreferrer" style="display:block;position:relative;margin-top:10px;">
+              <img src="${htmlEsc(thumb)}" referrerpolicy="no-referrer" alt="" style="display:block;width:100%;max-height:180px;object-fit:cover;border-radius:6px;">
+              ${p.media_kind === 'video' ? `<span style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.75);color:#fff;font-size:9px;letter-spacing:0.1em;padding:4px 10px;border-radius:12px;">▶ WATCH ON TELEGRAM${p.duration ? ` · ${htmlEsc(p.duration)}` : ''}</span>` : ''}
+            </a>`
+          : '';
+      const more = rest.slice(0, 4).map(r => {
+        const rc = (ALERT_KINDS[r.kind as AlertKind] ?? ALERT_KINDS.news).color;
+        return `<a href="${htmlEsc(urlSafe(r.link))}" target="_blank" rel="noopener noreferrer" style="display:flex;gap:6px;align-items:baseline;color:#C9C5BC;text-decoration:none;font-size:10px;line-height:1.35;margin-top:5px;">
+          <span style="flex:none;width:6px;height:6px;border-radius:50%;background:${rc};transform:translateY(-1px);"></span>
+          <span>${htmlEsc(r.title)} <span style="color:#5C5A54;">· ${htmlEsc(r.source_name)} · ${htmlEsc(timeAgo(r.published))}</span></span>
+        </a>`;
+      }).join('');
+      return `
+      <div style="${pStyle}border:1px solid ${c}66;width:300px;max-width:100%;padding:14px;max-height:min(44vh,440px);overflow-y:auto;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:9.5px;letter-spacing:0.12em;">
+          <span style="width:7px;height:7px;border-radius:50%;background:${c};box-shadow:0 0 8px ${c};"></span>
+          <span style="color:${c};font-weight:700;">${label}</span>
+          <span style="color:#8A8880;margin-left:auto;">${htmlEsc(timeAgo(p.published))}</span>
+        </div>
+        <div style="color:#F2EFE8;font-family:Inter,system-ui,sans-serif;font-size:12.5px;font-weight:600;line-height:1.35;">${htmlEsc(p.title)}</div>
+        <div style="margin-top:6px;font-size:9.5px;color:#8A8880;">${htmlEsc(p.source_name)}${p.lean ? ` · <span style="color:#9B978E;">${htmlEsc(p.lean)}</span>` : ''}</div>
+        <div style="margin-top:6px;font-size:9.5px;color:${c};" title="The place the post names, resolved against OpenStreetMap. Town-level: a post names a place, not an exact spot.">📍 ${htmlEsc(p.place_label)}<span style="color:#5C5A54;"> · ${p.precision === 'region' ? 'region' : 'place'} named in the post · © OpenStreetMap</span></div>
+        ${media}
+        ${link !== '#' ? `<a href="${htmlEsc(link)}" target="_blank" rel="noopener noreferrer" style="${linkStyle}color:${c};border:1px solid ${c}66;background:${c}1a;">OPEN POST ↗</a>` : ''}
+        ${more ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.06);"><div style="font-size:8.5px;letter-spacing:0.14em;color:#5C5A54;">ALSO HERE</div>${more}</div>` : ''}
+      </div>`;
+    };
+
+    /* Several reports can name the same town; they stack, newest first. */
+    const reportsAt = (coords: [number, number], leadId?: string) => {
+      const seen = new Set<string>();
+      return alertPinsRef.current
+        .filter(f => f.geometry.coordinates[0] === coords[0] && f.geometry.coordinates[1] === coords[1])
+        .map(f => f.properties)
+        .filter(p => !seen.has(p.id) && seen.add(p.id))
+        .sort((a, b) => (a.id === leadId ? -1 : b.id === leadId ? 1 : Date.parse(b.published) - Date.parse(a.published)));
+    };
+
+    /** Rings the pin a popup is open on, and clears the ring when it closes. */
+    const markSelected = (id: string) => {
+      try { map.setFilter('alert-pin-selected', ['==', ['get','id'], id]); } catch { /* style not settled */ }
+    };
+    const openAlertPopup = (feature: AlertPinFeature, leadId?: string) => {
+      popup(feature.geometry.coordinates, alertPopupHtml(reportsAt(feature.geometry.coordinates, leadId)));
+      markSelected(feature.properties.id);
+      popupRef.current?.once('close', () => markSelected(''));
+    };
+
+    map.on('click', 'alert-pin-dots', e => {
+      // Matched by id: a rendered feature's geometry is tile-quantised, so it
+      // does not equal the coordinates the pin was placed at.
+      const ids = new Set((e.features ?? []).map(f => f.properties?.id));
+      const lead = alertPinsRef.current.find(f => ids.has(f.properties.id));
+      if (lead) openAlertPopup(lead);
+    });
+
+    openAlertPinRef.current = (id: string) => {
+      const f = alertPinsRef.current.find(x => x.properties.id === id);
+      if (f) openAlertPopup(f, id);
+    };
+
+    /*
+     * Keep the canvas the size of its container.
+     *
+     * MapLibre reads the container once, when it is constructed, and falls
+     * back to 400x300 if the container has no size yet. Its own trackResize
+     * watches the window, which never fires when the container is what
+     * changed — so a map built a frame too early stayed 400x300 inside a full
+     * screen container for the rest of the session, which is what the live
+     * site was serving: a small square of map in the corner of a black page.
+     * A window resize did not recover it; one resize() call did.
+     */
+    const sizeToContainer = new ResizeObserver(() => map.resize());
+    sizeToContainer.observe(container);
+
+    return () => {
+      sizeToContainer.disconnect();
+      cancelAnimationFrame(hoverFrame);
+      map.remove();
+      mapRef.current = null;
+    };
   }, []);
 
   // Day/Night
@@ -1893,87 +2106,35 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setGeo('network-mesh', meshLinks);
   }, [mapReady, activeLayers.malware, data.malware_threats, setGeo]);
 
-  // ══ LIVE CYBER ATTACKS — Threat network with real-time flow animation ══
-  const cyberAnimRef = useRef<number>(0);
-
+  /* ══ BOTNET C2 INFRASTRUCTURE ══
+     Static dots, no animation. The arcs that used to fly across this layer
+     were drawn between a fabricated attacker origin and the C2's country, and
+     the marching-ants animation read as traffic that no source had observed.
+     A blocklist has no motion in it. */
   useEffect(() => {
     if (!mapReady || !mapRef.current) return;
     const al = activeLayers as any;
-    const attacks = data.cyber_attacks;
+    const indicators = data.cyber_attacks;
 
-    // Clean up when toggled off or no data
-    if (!al.cyber_attacks || !attacks?.length) {
-      cancelAnimationFrame(cyberAnimRef.current);
-      setGeo('cyber-arcs', []);
+    if (!al.cyber_attacks || !indicators?.length) {
       setGeo('cyber-heads', []);
-      setGeo('cyber-impacts', []);
       return;
     }
 
-    // Build static GeoJSON features (dots stay clickable)
-    const dots: any[] = [];
-    const srcGlows: any[] = [];
-    const lines: any[] = [];
-
-    for (const a of attacks) {
-      dots.push({
+    // A C2 whose hosting country is unknown has no honest position on a map.
+    const dots = indicators
+      .filter((c: any) => typeof c.lng === 'number' && typeof c.lat === 'number')
+      .map((c: any) => ({
         type: 'Feature',
-        geometry: { type: 'Point', coordinates: [a.dst_lng, a.dst_lat] },
+        geometry: { type: 'Point', coordinates: [c.lng, c.lat] },
         properties: {
-          malware: a.malware, action: a.action, target_ip: a.target_ip,
-          target_country: a.target_country, port: a.port, severity: a.severity,
-          status: a.status,
-          src_lat: a.src_lat.toFixed(2), src_lng: a.src_lng.toFixed(2),
-          dst_lat: a.dst_lat.toFixed(2), dst_lng: a.dst_lng.toFixed(2),
+          id: c.id, ip: c.ip, port: c.port, malware: c.malware, status: c.status,
+          hostname: c.hostname, country: c.country, as_number: c.as_number, as_name: c.as_name,
+          first_seen: c.first_seen, last_online: c.last_online,
         },
-      });
-      srcGlows.push({
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: [a.src_lng, a.src_lat] },
-        properties: { severity: a.severity },
-      });
-      lines.push({
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: [[a.src_lng, a.src_lat], [a.dst_lng, a.dst_lat]] },
-        properties: { malware: a.malware, severity: a.severity },
-      });
-    }
+      }));
 
     setGeo('cyber-heads', dots);
-    setGeo('cyber-impacts', srcGlows);
-    setGeo('cyber-arcs', lines);
-
-    // Animate: aggressive marching-ants with fast dash cycling
-    const map = mapRef.current;
-    let step = 0;
-    function animateFlow() {
-      step++;
-      if (!map) return;
-      try {
-        // Fast cycling dash pattern — creates visible movement along the line
-        const phase = (step * 0.15) % 6;
-        map.setPaintProperty('cyber-arcs-flow', 'line-dasharray', [2, 3 + phase * 0.4]);
-
-        // Alternate opacity on the core line for flicker effect
-        const coreFlicker = 0.55 + Math.sin(step * 0.05) * 0.15;
-        map.setPaintProperty('cyber-arcs-core', 'line-opacity', coreFlicker);
-
-        // Pulse target dots — breathing black nodes
-        const pulse = 1.5 + Math.sin(step * 0.1) * 0.6;
-        map.setPaintProperty('cyber-heads', 'circle-stroke-width', pulse);
-        map.setPaintProperty('cyber-heads', 'circle-stroke-color',
-          step % 30 < 15 ? '#222222' : '#444444'
-        );
-
-        // Pulse source glow — dark breathing aura
-        const glowPulse = 0.06 + Math.sin(step * 0.07) * 0.04;
-        map.setPaintProperty('cyber-impacts', 'circle-opacity', glowPulse);
-      } catch {}
-      cyberAnimRef.current = requestAnimationFrame(animateFlow);
-    }
-    cyberAnimRef.current = requestAnimationFrame(animateFlow);
-
-    return () => cancelAnimationFrame(cyberAnimRef.current);
   }, [mapReady, (activeLayers as any).cyber_attacks, data.cyber_attacks, setGeo]);
 
 
@@ -2062,6 +2223,72 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setGeo('live-news', activeLayers.live_news && data.live_feeds ? data.live_feeds.map((f: any) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [f.lng, f.lat] }, properties: { name: f.name, city: f.city, country: f.country, url: f.url, category: f.category, embed_allowed: f.embed_allowed !== false } })) : []);
   }, [mapReady, data.live_feeds, activeLayers.live_news, setGeo]);
 
+  // Live Alert pins. Kept whole in the ref even when the layer is off, so the
+  // feed's locate button can still open a report's pin.
+  useEffect(() => {
+    if (!mapReady) return;
+    const reports: PinnedReport[] = Array.isArray(data.alert_pins) ? data.alert_pins : [];
+    /* The feed hides what its filters exclude; the map follows it, so a search
+       or a theatre filter narrows the pins to the reports being read. */
+    const shown = alertPinIds ? new Set(alertPinIds) : null;
+    const now = Date.now();
+
+    const placed = reports.flatMap((n): { n: PinnedReport; lat: number; lng: number }[] => {
+      if (!n?.place || !Array.isArray(n.coords)) return [];
+      const [lat, lng] = n.coords;
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return [];
+      if (shown && !shown.has(n.id)) return [];
+      return [{ n, lat, lng }];
+    });
+
+    // How many reports name each place, so a town can say it carries several.
+    const perPlace = new Map<string, number>();
+    for (const { lat, lng } of placed) {
+      const key = `${lat},${lng}`;
+      perPlace.set(key, (perPlace.get(key) ?? 0) + 1);
+    }
+
+    alertPinsRef.current = placed.map(({ n, lat, lng }): AlertPinFeature => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [lng, lat] },
+      properties: {
+        id: n.id,
+        kind: n.alert_kind === 'rocket' || n.alert_kind === 'event' ? n.alert_kind : 'news',
+        stack: perPlace.get(`${lat},${lng}`) ?? 1,
+        fresh: now - Date.parse(n.published) < ALERT_FRESH_MS,
+        title: n.title,
+        source_name: n.source_name,
+        lean: n.lean ?? '',
+        published: n.published,
+        link: n.link ?? '',
+        place_name: n.place!.name,
+        place_label: n.place!.label,
+        precision: n.place!.precision,
+        media_kind: n.media?.kind ?? '',
+        video: n.media?.video ?? '',
+        thumb: n.media?.thumb ?? '',
+        duration: n.media?.duration ?? '',
+      },
+    }));
+    setGeo('alert-pins', activeLayers.alert_pins ? alertPinsRef.current : []);
+  }, [mapReady, data.alert_pins, activeLayers.alert_pins, alertPinIds, setGeo]);
+
+  /* The newest reports pulse, so something that just landed catches the eye
+     without the other pins moving. Same 200ms tick the malware ring uses. */
+  useEffect(() => {
+    if (!mapReady || !mapRef.current || !activeLayers.alert_pins) return;
+    const map = mapRef.current;
+    const tick = () => {
+      try {
+        map.setPaintProperty('alert-pin-pulse', 'circle-radius', 9 + Math.sin(Date.now() / 260) * 3.5);
+        map.setPaintProperty('alert-pin-pulse', 'circle-stroke-opacity', 0.55 + Math.sin(Date.now() / 260) * 0.25);
+      } catch { /* style not settled yet */ }
+    };
+    tick();
+    const timer = setInterval(tick, 200);
+    return () => clearInterval(timer);
+  }, [mapReady, activeLayers.alert_pins]);
+
 
   useEffect(() => {
     if (!mapReady) return;
@@ -2143,7 +2370,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
 
     setVis(['malware-glow','malware-dots','malware-label','malware-new-ring'], activeLayers.malware);
     setVis(['network-mesh-atmo', 'network-mesh-glow', 'network-mesh-core'], activeLayers.internet_outages || activeLayers.malware);
-    setVis(['cyber-arcs-atmo','cyber-arcs-glow','cyber-arcs-core','cyber-arcs-flow','cyber-heads','cyber-impacts','cyber-labels'], (activeLayers as any).cyber_attacks);
+    setVis(['cyber-heads','cyber-labels'], (activeLayers as any).cyber_attacks);
     setVis(['day-night-fill'], activeLayers.day_night);
     setVis(['fl-commercial'], activeLayers.flights);
     setVis(['fl-private'], activeLayers.private);
@@ -2157,6 +2384,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['choke-glow','choke-dots','choke-label'], activeLayers.maritime);
     setVis(['ship-dots','ship-label'], activeLayers.maritime);
     setVis(['news-glow','news-dots','news-label'], activeLayers.live_news);
+    setVis(['alert-pin-glow','alert-pin-dots','alert-pin-label','alert-pin-pulse','alert-pin-selected'], activeLayers.alert_pins);
     setVis(['conflict-icons'], activeLayers.conflict_zones !== false);
 
     setVis(['balloon-dots','balloon-label'], activeLayers.balloons);
@@ -2309,7 +2537,13 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
   // Fly-to
   useEffect(() => {
     if (!mapReady || !mapRef.current || !flyToLocation) return;
-    mapRef.current.flyTo({ center: [flyToLocation.lng, flyToLocation.lat], zoom: flyToLocation.zoom ?? 8, duration: 2000 });
+    const map = mapRef.current;
+    map.flyTo({ center: [flyToLocation.lng, flyToLocation.lat], zoom: flyToLocation.zoom ?? 8, duration: 2000 });
+    const alertId = flyToLocation.alertId;
+    if (!alertId) return;
+    const open = () => openAlertPinRef.current?.(alertId);
+    map.once('moveend', open);
+    return () => { map.off('moveend', open); };
   }, [mapReady, flyToLocation]);
 
   // 3D buildings are independent of the elevation renderer.
@@ -3026,6 +3260,18 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedSat, clearSat]);
+
+  // Zooming past the ceiling takes the satellites off the map, so a readout
+  // left over from before the zoom would be describing something no longer
+  // there — and its ring and orbit are already gone.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map || !selectedSat) return;
+    const onZoom = () => { if (map.getZoom() > SAT_MAX_ZOOM) clearSat(); };
+    onZoom();
+    map.on('zoomend', onZoom);
+    return () => { map.off('zoomend', onZoom); };
+  }, [mapReady, selectedSat, clearSat]);
 
   return (
     <>

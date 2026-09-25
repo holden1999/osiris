@@ -1,29 +1,19 @@
 import { NextResponse } from 'next/server';
+import {
+  buildCountryRisk,
+  quakeMagnitudeByCountry,
+  RISK_FACTORS,
+  BASELINE_REVIEWED,
+} from '@/lib/country-risk';
 
-// Country Intelligence Index — composite risk from earthquakes, conflicts, instability
-// Inspired by WorldMonitor's 12-signal risk scoring
-const RISK_FACTORS: Record<string, { base: number; tags: string[] }> = {
-  UA: { base: 85, tags: ['active_conflict', 'infrastructure_damage'] },
-  RU: { base: 72, tags: ['sanctions', 'military_mobilization'] },
-  IL: { base: 78, tags: ['active_conflict', 'regional_instability'] },
-  PS: { base: 90, tags: ['active_conflict', 'humanitarian_crisis'] },
-  SY: { base: 82, tags: ['post_conflict', 'infrastructure_damage'] },
-  YE: { base: 88, tags: ['active_conflict', 'humanitarian_crisis'] },
-  MM: { base: 76, tags: ['civil_unrest', 'military_junta'] },
-  SD: { base: 84, tags: ['active_conflict', 'humanitarian_crisis'] },
-  AF: { base: 80, tags: ['post_conflict', 'governance_collapse'] },
-  KP: { base: 70, tags: ['nuclear_risk', 'isolation'] },
-  IR: { base: 68, tags: ['sanctions', 'nuclear_program', 'regional_proxy'] },
-  CN: { base: 35, tags: ['strategic_competition', 'taiwan_tensions'] },
-  TW: { base: 45, tags: ['invasion_risk', 'semiconductor_dependency'] },
-  VE: { base: 60, tags: ['economic_collapse', 'political_instability'] },
-  HT: { base: 85, tags: ['gang_violence', 'governance_collapse'] },
-  LB: { base: 65, tags: ['economic_crisis', 'political_deadlock'] },
-  PK: { base: 55, tags: ['terrorism', 'political_instability'] },
-  SO: { base: 82, tags: ['terrorism', 'state_fragility'] },
-  LY: { base: 72, tags: ['divided_government', 'militia_control'] },
-  ET: { base: 62, tags: ['ethnic_tensions', 'regional_conflicts'] },
-};
+/**
+ * OSIRIS — country risk index.
+ *
+ * The per-country baseline is an editorial ordering, not a calibrated model;
+ * see `@/lib/country-risk`. The response labels it as such and reports the
+ * observed earthquake component separately so neither is mistaken for the
+ * other.
+ */
 
 // Major stock exchange status
 const EXCHANGES = [
@@ -63,35 +53,31 @@ export async function GET() {
       name: ex.name, country: ex.country, open: isExchangeOpen(ex),
     }));
 
-    // Enrich risk with live earthquake proximity
-    const quakeRisks: Record<string, number> = {};
+    // Enrich the baseline with recent significant earthquakes.
+    let quakeMagnitude: Record<string, number> = {};
+    let quakesAvailable = false;
     try {
-      const res = await fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson', { signal: AbortSignal.timeout(15000),  });
+      const res = await fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson', { signal: AbortSignal.timeout(15000) });
       if (res.ok) {
         const data = await res.json();
-        // Count significant quakes per rough region
-        for (const f of data.features || []) {
-          const place = f.properties?.place || '';
-          const mag = f.properties?.mag || 0;
-          // Extract country-ish context from place name
-          for (const [code, _] of Object.entries(RISK_FACTORS)) {
-            if (place.toLowerCase().includes(code.toLowerCase())) {
-              quakeRisks[code] = (quakeRisks[code] || 0) + mag;
-            }
-          }
-        }
+        quakeMagnitude = quakeMagnitudeByCountry(data.features || []);
+        quakesAvailable = true;
       }
     } catch (e) { console.warn('[OSIRIS] Suppressed error:', e instanceof Error ? e.message : e); }
 
-    const countries = Object.entries(RISK_FACTORS).map(([code, data]) => ({
-      code,
-      risk_score: Math.min(100, data.base + (quakeRisks[code] || 0)),
-      risk_level: data.base >= 80 ? 'CRITICAL' : data.base >= 60 ? 'HIGH' : data.base >= 40 ? 'ELEVATED' : 'LOW',
-      tags: data.tags,
-    })).sort((a, b) => b.risk_score - a.risk_score);
-
     return NextResponse.json({
-      countries,
+      countries: buildCountryRisk(quakeMagnitude),
+      methodology: {
+        basis: 'editorial',
+        summary:
+          'base_risk is a hand-assigned 0-100 ordering of current disruption, not a calibrated or back-tested probability. Do not cite it as a validated figure.',
+        baseline_reviewed: BASELINE_REVIEWED,
+        countries_covered: Object.keys(RISK_FACTORS).length,
+        observed_component: quakesAvailable
+          ? 'quake_magnitude is the summed magnitude of USGS M4.5+ events in the last day.'
+          : 'quake_magnitude is 0 for every country: the USGS feed did not answer, so no observed component was added.',
+        quakes_available: quakesAvailable,
+      },
       exchanges: exchangeStatus,
       open_exchanges: exchangeStatus.filter(e => e.open).length,
       total_exchanges: exchangeStatus.length,

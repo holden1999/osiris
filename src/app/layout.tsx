@@ -5,7 +5,7 @@ import "./globals.css";
 const SITE_URL = "https://osirisai.live";
 const SITE_NAME = "OSIRIS";
 const SITE_TITLE = "OSIRIS — Open Source Intelligence Platform | Live Flight Tracking, CCTV, OSINT Tools & More";
-const SITE_DESCRIPTION = "The open-source Palantir alternative. Track 10,000+ aircraft, 2,000 satellites, and worldwide CCTV cameras in real-time on a 3D globe. Run Nmap scans, DNS lookups, WHOIS queries, SSL cert analysis & threat intelligence — all from your browser. 20+ live data feeds including earthquakes, wildfires, nuclear facilities, cyber threats, and global conflicts. Free & open source.";
+const SITE_DESCRIPTION = "The open-source Palantir alternative. Track live aircraft, satellites, and worldwide CCTV cameras on a 3D globe. Run Nmap scans, DNS lookups, WHOIS queries, SSL cert analysis & threat intelligence — all from your browser. 20+ data sources including live earthquake, wildfire, cyber threat and conflict feeds, plus mapped reference data such as nuclear facilities. Free & open source.";
 
 export const viewport: Viewport = {
   themeColor: "#D4AF37",
@@ -151,12 +151,12 @@ const jsonLd = {
     "SSL/TLS certificate transparency search",
     "BGP routing & ASN lookup",
     "IP geolocation & threat intelligence",
-    "Real-time flight tracking (10,000+ aircraft via ADS-B)",
-    "Satellite tracking (2,000+ objects including ISS)",
-    "Worldwide CCTV camera monitoring (1,400+ feeds)",
+    "Real-time flight tracking via ADS-B",
+    "Satellite tracking (including ISS)",
+    "Worldwide CCTV camera monitoring",
     "Earthquake monitoring (USGS live feed)",
     "Wildfire detection (NASA FIRMS satellite data)",
-    "Nuclear facility mapping (worldwide)",
+    "Nuclear facility mapping (curated reference list, not a live feed)",
     "Severe weather alerts & tracking",
     "Cyber threat & CVE intelligence",
     "Space weather & solar storm monitoring",

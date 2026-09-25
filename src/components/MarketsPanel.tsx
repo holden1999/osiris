@@ -208,7 +208,7 @@ export default function MarketsPanel({ data, spaceWeather }: MarketsPanelProps) 
           <span className="text-[11px] font-mono tracking-widest text-[var(--text-muted)]">SPACE WEATHER</span>
         </div>
         <span className="text-[11px] font-mono font-bold" style={{ color: spaceWeather.storm_color }}>
-          Kp {spaceWeather.kp_index} — {spaceWeather.storm_level}
+          {spaceWeather.kp_index == null ? 'No reading' : `Kp ${spaceWeather.kp_index} — ${spaceWeather.storm_level}`}
         </span>
       </div>
       {spaceWeather.solar_flares?.length > 0 && (

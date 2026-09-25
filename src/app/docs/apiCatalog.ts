@@ -106,6 +106,7 @@ export const API_GROUPS: ApiGroup[] = [
         summary: 'Geomagnetic conditions and solar flare activity from NOAA SWPC.',
         returns: [
           'kp_index',
+          'kp_available',
           'kp_timestamp',
           'storm_level',
           'storm_color',
@@ -113,7 +114,8 @@ export const API_GROUPS: ApiGroup[] = [
           'alerts',
           'timestamp',
         ],
-        notes: '`storm_color` is a hex string the HUD renders directly, so clients need no severity lookup table.',
+        notes:
+          '`storm_color` is a hex string the HUD renders directly, so clients need no severity lookup table. `kp_index` is null and `storm_level` is "Unknown" when NOAA did not answer — absence of a reading is never reported as "Quiet".',
       },
     ],
   },
@@ -206,12 +208,14 @@ export const API_GROUPS: ApiGroup[] = [
         path: '/api/country-risk',
         method: 'GET',
         summary: 'Per-country risk scoring alongside market session state.',
-        returns: ['countries', 'exchanges', 'open_exchanges', 'total_exchanges', 'timestamp'],
+        returns: ['countries', 'methodology', 'exchanges', 'open_exchanges', 'total_exchanges', 'timestamp'],
+        notes:
+          '`base_risk` is a hand-assigned editorial ordering, not a calibrated or back-tested figure — `methodology.basis` says so on every response. `quake_magnitude` is the observed USGS component, reported separately so the two are not conflated.',
       },
       {
         path: '/api/region-dossier',
         method: 'GET',
-        summary: 'Composite intelligence summary for a map location — the panel behind a map right-click.',
+        summary: 'Composite intelligence summary for a map location — the panel behind a map double right-click.',
         params: [
           { name: 'lat', required: true, desc: 'Latitude of the region.', example: '48.3794' },
           { name: 'lng', required: true, desc: 'Longitude of the region.', example: '31.1656' },
@@ -228,8 +232,8 @@ export const API_GROUPS: ApiGroup[] = [
       {
         path: '/api/news',
         method: 'GET',
-        summary: 'Aggregated OSINT news items.',
-        returns: ['news', 'total', 'timestamp'],
+        summary: 'Telegram OSINT posts with the declared lean of each channel, media, cross-posts and a per-source health report. risk_score is a keyword count, not a model output, and coords are preset country anchors.',
+        returns: ['news', 'total', 'sources', 'timestamp'],
       },
       {
         path: '/api/live-news',
@@ -343,8 +347,8 @@ export const API_GROUPS: ApiGroup[] = [
       {
         path: '/api/cyber-attacks',
         method: 'GET',
-        summary: 'Observed attack events for the live threat map.',
-        returns: ['attacks', 'total'],
+        summary: 'Listed botnet C2 servers from abuse.ch Feodo Tracker — blocklist entries, not observed attacks.',
+        returns: ['indicators', 'total', 'online', 'fetched_at', 'source', 'source_url'],
       },
       {
         path: '/api/malware',
@@ -575,14 +579,14 @@ export const API_GROUPS: ApiGroup[] = [
       {
         path: '/api/ai/overview',
         method: 'POST',
-        summary: 'Short headline highlights for the overview panel.',
-        returns: ['highlights', 'generatedAt'],
+        summary: 'One-click read-out for the Alerts or Markets panel. Alerts also return a structured brief: threads by theatre, perspective and seismic summary.',
+        returns: ['mode', 'overview', 'highlights', 'generatedBy', 'generatedAt', 'brief'],
         bodyExample: `{
-  "earthquakes": [],
-  "news": [],
-  "threats": [],
-  "cyberAlerts": [],
-  "timestamp": "2026-07-29T12:00:00Z"
+  "mode": "alerts",
+  "payload": {
+    "news": [{ "id": "a1", "title": "Drone attack on Kharkiv", "source": "t.me/liveuamap", "bloc": "western", "published": "2026-09-17T11:00:00Z" }],
+    "earthquakes": [{ "magnitude": 5.4, "place": "80 km S of Kuril", "time": 1789646400000 }]
+  }
 }`,
       },
     ],

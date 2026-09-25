@@ -29,10 +29,10 @@ Osiris is a production-grade OSINT platform that provides situational awareness 
 |--------|------------|---------|
 | **Aviation** | Commercial, Private, Military, Jets | OpenSky Network |
 | **Maritime** | 39 Global Ports, 10 Chokepoints | Static Naval Intel |
-| **CCTV** | 17,000+ Cameras | TfL, WSDOT, Caltrans, ODOT, MDOT, HK Transport Dept, Taiwan THB, NZTA + more |
+| **CCTV** | 17,000+ Cameras | TfL, WSDOT, Caltrans, ODOT, MDOT, HK Transport Dept, Taiwan THB, NZTA, Rijkswaterstaat, [Public Webcams](#acknowledgements) + more |
 | **Seismic** | Real-time M2.5+ | USGS Earthquake API |
 | **Fires** | Active Hotspots | NASA FIRMS |
-| **News** | 24/7 Live Streams | 25+ Global Broadcasters |
+| **News** | 24/7 Live Streams | 23 Global Broadcasters |
 | **Weather** | Severe Events | NASA EONET |
 | **Space** | Solar Weather, Satellites | NOAA SWPC, N2YO |
 | **Cyber** | CVE Threats, Vulnerability Scanning | NVD, Custom Scanner |
@@ -101,7 +101,7 @@ Run `npm test` for offline checks or `RUN_LIVE_TESTS=1 npx vitest run src/app/ap
 - **OFAC Sanctions Search** — query persons, organizations, vessels and aircraft against the US OFAC SDN list
 
 ### Live Broadcast Network
-- **25+ live 24/7 news streams** from global broadcasters
+- **23 live 24/7 news streams** from global broadcasters
 - Click any news dot on the map to open the live stream
 - Feeds from NBC, CBS, ABC, Sky News, Al Jazeera, France 24, NHK, WION, and more
 
@@ -247,6 +247,22 @@ See [DOCKER.md](DOCKER.md) for all endpoints and cross-compilation.
 | `S` | Toggle satellites |
 | `D` | Toggle day/night cycle |
 | `Escape` | Close panels |
+
+---
+
+## Acknowledgements
+
+**Public webcams** — the cameras in this layer are open data: each one is broadcast
+publicly by whoever runs it, on their own site or their own channel. What the web
+lacked was a catalogue of them.
+
+[bekijkhet.nu](https://www.bekijkhet.nu/) is that catalogue, and it is the basis for
+every camera in the layer. Bram and Annelies have kept it by hand since 2012, and
+without their index these cameras would still be scattered across several hundred
+unrelated sites with no way to find them.
+
+OSIRIS links every one of them straight through to the operator who runs it, which is
+also how bekijkhet.nu asks to be read.
 
 ---
 

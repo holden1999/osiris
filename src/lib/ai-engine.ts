@@ -33,8 +33,14 @@ export interface NewsItem {
   published: string;
   source: string;
   risk_score: number;
+  /** How `risk_score` was derived, and the terms that produced it. */
+  risk_method?: string;
+  risk_keywords?: string[];
   coords: [number, number] | null;
-  machine_assessment: string | null;
+  /** 'country-anchor' when `coords` is a preset centroid, not an event fix. */
+  location_precision?: 'country-anchor' | null;
+  coords_anchor?: string | null;
+  keyword_assessment: string | null;
 }
 
 export interface ThreatEvent {
