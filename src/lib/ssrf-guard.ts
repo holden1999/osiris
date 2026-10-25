@@ -15,16 +15,18 @@ import { isIP } from 'node:net';
  *      TTL=0 race against the downstream consumer.
  */
 
-const IPV4_BLOCKS_TEXT: Array<[string, number]> = [
+/**
+ * Ranges that are never legitimate scan targets, private-opt-in or not:
+ * link-local (incl. the cloud metadata endpoint 169.254.169.254), multicast,
+ * broadcast, TEST-NET, benchmarking, and the "this network" shorthand. An
+ * operator may allow private RFC1918 ranges via ALLOW_PRIVATE_TARGETS=1, but
+ * these stay blocked so the server can never be steered at metadata/multicast.
+ */
+const IPV4_ALWAYS_BLOCKED: Array<[string, number]> = [
   ['0.0.0.0', 8],          // "this" network
-  ['10.0.0.0', 8],         // RFC1918
-  ['100.64.0.0', 10],      // CGNAT / Tailscale
-  ['127.0.0.0', 8],        // loopback
   ['169.254.0.0', 16],     // link-local (incl. cloud metadata 169.254.169.254)
-  ['172.16.0.0', 12],      // RFC1918
   ['192.0.0.0', 24],       // IETF protocol assignments
   ['192.0.2.0', 24],       // TEST-NET-1
-  ['192.168.0.0', 16],     // RFC1918
   ['198.18.0.0', 15],      // benchmarking
   ['198.51.100.0', 24],    // TEST-NET-2
   ['203.0.113.0', 24],     // TEST-NET-3
@@ -32,19 +34,37 @@ const IPV4_BLOCKS_TEXT: Array<[string, number]> = [
   ['240.0.0.0', 4],        // reserved (incl. 255.255.255.255 broadcast)
 ];
 
-const IPV6_BLOCK_PREFIXES = [
+/**
+ * Private / local ranges. Blocked by default; permitted for scanner targets
+ * only when ALLOW_PRIVATE_TARGETS=1. Loopback and CGNAT are included because
+ * a local operator legitimately scans its own router / NAT.
+ */
+const IPV4_PRIVATE_BLOCKS: Array<[string, number]> = [
+  ['10.0.0.0', 8],         // RFC1918
+  ['100.64.0.0', 10],      // CGNAT / Tailscale
+  ['127.0.0.0', 8],        // loopback
+  ['172.16.0.0', 12],      // RFC1918
+  ['192.168.0.0', 16],     // RFC1918
+];
+
+/** Always blocked IPv6: unspecified, NAT64, discard, docs, link/site-local, multicast. */
+const IPV6_ALWAYS_BLOCKED = [
   '::',           // unspecified
-  '::1',          // loopback
   '::ffff:',      // IPv4-mapped (covers ::ffff:127.0.0.1, ::ffff:10.x, etc.)
   '64:ff9b::',    // NAT64
   '64:ff9b:1:',   // local NAT64
   '100::',        // discard prefix
   '2001:db8:',    // documentation
-  'fc',           // unique-local (fc00::/7) — any addr starting with fc/fd
-  'fd',
   'fe8', 'fe9', 'fea', 'feb', // link-local fe80::/10
   'fec', 'fed', 'fee', 'fef', // site-local fec0::/10 (deprecated but still routable to internal hosts on some stacks)
   'ff',           // multicast ff00::/8
+];
+
+/** Private IPv6: loopback and unique-local fc00::/7 — relaxable via the flag. */
+const IPV6_PRIVATE_BLOCKS = [
+  '::1',  // loopback
+  'fc',   // unique-local (fc00::/7) — any addr starting with fc/fd
+  'fd',
 ];
 
 function ipv4ToInt(ip: string): number {
@@ -54,9 +74,9 @@ function ipv4ToInt(ip: string): number {
   return parts[0] * 0x1000000 + parts[1] * 0x10000 + parts[2] * 0x100 + parts[3];
 }
 
-function ipv4InBlocked(ip: string): boolean {
+function ipv4InBlocked(ip: string, blocks: Array<[string, number]>): boolean {
   const ipInt = ipv4ToInt(ip);
-  for (const [net, bits] of IPV4_BLOCKS_TEXT) {
+  for (const [net, bits] of blocks) {
     const netInt = ipv4ToInt(net);
     // 2^(32-bits) is the size of the block; the "network address" must match
     // after stripping the host bits.
@@ -66,14 +86,26 @@ function ipv4InBlocked(ip: string): boolean {
   return false;
 }
 
-function ipv6InBlocked(ip: string): boolean {
+function ipv6InBlocked(ip: string, prefixes: string[]): boolean {
   const lower = ip.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
-  // Exact-match singletons first
-  if (lower === '::' || lower === '::1') return true;
-  for (const prefix of IPV6_BLOCK_PREFIXES) {
+  // '::' is a prefix of '::1', so the unspecified address must be matched
+  // exactly to keep loopback independently relaxable via the private flag.
+  if (lower === '::') return true;
+  for (const prefix of prefixes) {
+    if (prefix === '::') continue;
     if (lower.startsWith(prefix)) return true;
   }
   return false;
+}
+
+/**
+ * Opt-in permit for private / local scan targets. Off (default) keeps the
+ * SSRF posture unchanged; 1/true/yes lets the scanner reach RFC1918, loopback
+ * and CGNAT addresses. The ALWAYS_BLOCKED ranges are never relaxed.
+ */
+export function allowPrivateTargets(): boolean {
+  const v = process.env.ALLOW_PRIVATE_TARGETS?.trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
 }
 
 /**
@@ -110,12 +142,40 @@ export interface ValidationResult {
 }
 
 /**
+ * Classify a canonical IPv4 dotted-quad: 'always' (blocked regardless of the
+ * private opt-in), 'private' (relaxable), or null (public). Used by the
+ * scanner proxy and the sweep route so both honour ALLOW_PRIVATE_TARGETS.
+ */
+export function classifyIPv4(ip: string): 'always' | 'private' | 'public' {
+  const canonical = parseIPv4(ip);
+  if (!canonical) return 'always';
+  if (ipv4InBlocked(canonical, IPV4_ALWAYS_BLOCKED)) return 'always';
+  if (ipv4InBlocked(canonical, IPV4_PRIVATE_BLOCKS)) return 'private';
+  return 'public';
+}
+
+function ipv4TargetAllowed(ip: string, allowPrivate: boolean): boolean {
+  const kind = classifyIPv4(ip);
+  return kind === 'public' || (kind === 'private' && allowPrivate);
+}
+
+function ipv6TargetAllowed(ip: string, allowPrivate: boolean): boolean {
+  const lower = ip.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+  if (ipv6InBlocked(lower, IPV6_ALWAYS_BLOCKED)) return false;
+  if (ipv6InBlocked(lower, IPV6_PRIVATE_BLOCKS)) return allowPrivate;
+  return true;
+}
+
+/**
  * Validate that `host` (either an IP literal or a hostname) is safe to use as
  * a network target. Returns ok=false when the literal IP is in a blocked
  * range, the IP literal uses a non-canonical form, or any resolved A/AAAA
- * answer lands in a blocked range.
+ * answer lands in a blocked range. Private ranges are permitted for the
+ * caller only when `allowPrivate` is set (scanner/sweep honour the
+ * ALLOW_PRIVATE_TARGETS opt-in); link-local, multicast and TEST-NET can never
+ * be enabled.
  */
-export async function validateHost(host: string): Promise<ValidationResult> {
+export async function validateHost(host: string, allowPrivate: boolean = false): Promise<ValidationResult> {
   const trimmed = host.trim();
   if (!trimmed) return { ok: false, reason: 'empty host' };
 
@@ -143,11 +203,11 @@ export async function validateHost(host: string): Promise<ValidationResult> {
   if (ipFamily === 4) {
     const canonical = parseIPv4(bracketed);
     if (!canonical) return { ok: false, reason: 'non-canonical IPv4 form rejected' };
-    if (ipv4InBlocked(canonical)) return { ok: false, reason: 'IPv4 in reserved range' };
+    if (!ipv4TargetAllowed(canonical, allowPrivate)) return { ok: false, reason: 'IPv4 in reserved range' };
     return { ok: true, resolved: [canonical] };
   }
   if (ipFamily === 6) {
-    if (ipv6InBlocked(bracketed)) return { ok: false, reason: 'IPv6 in reserved range' };
+    if (!ipv6TargetAllowed(bracketed, allowPrivate)) return { ok: false, reason: 'IPv6 in reserved range' };
     return { ok: true, resolved: [bracketed] };
   }
 
@@ -167,9 +227,9 @@ export async function validateHost(host: string): Promise<ValidationResult> {
   }
   for (const a of answers) {
     if (a.family === 4) {
-      if (ipv4InBlocked(a.address)) return { ok: false, reason: `hostname resolves to reserved IPv4 ${a.address}` };
+      if (!ipv4TargetAllowed(a.address, allowPrivate)) return { ok: false, reason: `hostname resolves to reserved IPv4 ${a.address}` };
     } else if (a.family === 6) {
-      if (ipv6InBlocked(a.address)) return { ok: false, reason: `hostname resolves to reserved IPv6 ${a.address}` };
+      if (!ipv6TargetAllowed(a.address, allowPrivate)) return { ok: false, reason: `hostname resolves to reserved IPv6 ${a.address}` };
     }
   }
   return { ok: true, resolved: answers.map(a => a.address) };
@@ -197,7 +257,7 @@ export async function safeFetch(
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       throw new Error(`safeFetch: blocked protocol ${parsed.protocol}`);
     }
-    const check = await validateHost(parsed.hostname);
+    const check = await validateHost(parsed.hostname, false);
     if (!check.ok) {
       throw new Error(`safeFetch: blocked target — ${check.reason}`);
     }
@@ -282,8 +342,8 @@ function bareIp(value: string): string {
 export function isPublicIp(value: string): boolean {
   const ip = bareIp(value);
   const v4 = parseIPv4(ip);
-  if (v4) return !ipv4InBlocked(v4);
-  return isIP(ip) === 6 && !ipv6InBlocked(ip);
+  if (v4) return classifyIPv4(v4) === 'public';
+  return isIP(ip) === 6 && ipv6TargetAllowed(ip, false);
 }
 
 /**

@@ -437,6 +437,31 @@ export const API_GROUPS: ApiGroup[] = [
         returns: ['target', 'ip', 'source', 'ports', 'hostnames', 'domains', 'org', 'isp', 'asn', 'os', 'location', 'cpes', 'vulns', 'tags', 'last_update', 'note'],
       },
       {
+        path: '/api/osint/ran',
+        method: 'GET',
+        summary: 'Cellular base-station (RAN) exposure triage — passive InternetDB record classified as likely / possible / not BTS-BBU-eNodeB gear.',
+        params: [{ name: 'ip', required: true, desc: 'Address to classify.', example: '8.8.8.8' }],
+        returns: ['ip', 'status', 'ports', 'cpes', 'hostnames', 'tags', 'vulns', 'ran'],
+      },
+      {
+        path: '/api/osint/bts',
+        method: 'GET',
+        summary: 'BTS / cell-tower coordinates from OpenCellID — single-cell lookup by network identifiers, or all towers in a bounding box.',
+        params: [
+          { name: 'mcc', desc: 'Mobile country code (cell lookup).', example: '510' },
+          { name: 'mnc', desc: 'Mobile network code (cell lookup).', example: '11' },
+          { name: 'lac', desc: 'Local / tracking area code (cell lookup).', example: '12345' },
+          { name: 'cellid', desc: 'Cell id or base-station id (cell lookup).', example: '98765' },
+          { name: 'radio', desc: 'Optional radio filter: GSM | UMTS | LTE | NR | NBIOT | CDMA.' },
+          { name: 'bbox', desc: 'Area lookup: "latmin,lonmin,latmax,lonmax".', example: '-6.4,106.7,-6.2,107.0' },
+          { name: 'limit', desc: 'Area lookup: max rows (1–50).', example: '50' },
+        ],
+        returns: ['source', 'mode', 'cell | cells', 'count', 'attribution', 'timestamp'],
+        env: ['OPENCELLID_API_KEY'],
+        notes:
+          'Data is CC BY-SA 4.0 — attribute "OpenCelliD". Returns 503 when `OPENCELLID_API_KEY` is unset. Free key: my.opencellid.org/register (1000 credits/day).',
+      },
+      {
         path: '/api/osint/bgp',
         method: 'GET',
         summary: 'ASN, prefix, and peering relationships.',

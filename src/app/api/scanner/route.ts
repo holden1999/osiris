@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { validateHost, isRateLimited, getClientIp } from '@/lib/ssrf-guard';
+import { validateHost, isRateLimited, getClientIp, allowPrivateTargets, classifyIPv4 } from '@/lib/ssrf-guard';
 
 /**
  * OSIRIS — Scanner Proxy (Hardened)
@@ -62,12 +62,18 @@ export async function GET(req: Request) {
 
   // 4. Block private/internal targets (DNS-resolves before deciding so a
   //    hostname pointing at a reserved range is rejected, and IPv6 + non-
-  //    canonical IPv4 forms are no longer free bypasses).
-  const guard = await validateHost(target);
+  //    canonical IPv4 forms are no longer free bypasses). Operators can opt
+  //    into private-range targets with ALLOW_PRIVATE_TARGETS=1; link-local,
+  //    multicast and TEST-NET ranges stay blocked either way.
+  const allowPrivate = allowPrivateTargets();
+  const guard = await validateHost(target, allowPrivate);
   if (!guard.ok) {
+    const privateHint = classifyIPv4(target) === 'private' && !allowPrivate
+      ? ' — this is a private/local address; set ALLOW_PRIVATE_TARGETS=1 in the server env to permit private-range targets.'
+      : '';
     return NextResponse.json({
       error: 'Target blocked',
-      detail: `Target validation failed: ${guard.reason}`,
+      detail: `Target validation failed: ${guard.reason}.${privateHint}`,
     }, { status: 403 });
   }
 

@@ -9,9 +9,10 @@ import {
   ChevronDown, ChevronUp, Loader2, AlertTriangle, Server,
   Lock, MapPin, Bug, Wifi, Code, Layers, Network, Fingerprint,
   CheckCircle, XCircle, Clock, ExternalLink, Crosshair,
-  Maximize2, Minimize2, Gavel, Bitcoin, Phone, Terminal, ShieldAlert, User
+  Maximize2, Minimize2, Gavel, Bitcoin, Phone, Terminal, ShieldAlert, User, Skull, Monitor, KeyRound,
+  Download, Trash2
 } from 'lucide-react';
-import { ipToNumber, numberToIp, calculateSubnetStart, classifyDevice, assessRisk, batchFetch, ShodanInternetDBResponse, SweepDevice } from '@/lib/osint-utils';
+import { ipToNumber, numberToIp, calculateSubnetStart, batchFetch, buildSweepDevices, ShodanInternetDBResponse } from '@/lib/osint-utils';
 import ChainBrief from '@/components/ChainBrief';
 import FingerprintSearch, { useFingerprintSearch } from '@/components/FingerprintSearch';
 import DonBotScan from '@/components/DonBotScan';
@@ -47,6 +48,7 @@ const TABS: ToolDef[] = [
   { id: 'scanner', label: 'PORT SCAN', icon: Radar, placeholder: 'IP or hostname (e.g. 8.8.8.8)', color: '#00E5FF', group: 'network', blurb: 'Shodan open ports, services and banners — or a subnet sweep' },
   { id: 'vuln', label: 'VULN SWEEP', icon: Bug, placeholder: 'IP or hostname', color: '#FF3D3D', group: 'network', blurb: 'Known CVEs affecting the host' },
   { id: 'shodan', label: 'SHODAN IOT', icon: Network, placeholder: 'IP address', color: '#FF3D3D', group: 'network', blurb: 'Internet-exposed device record' },
+  { id: 'ran', label: 'RAN/CELL', icon: Radio, placeholder: 'IP address', color: '#3DDC84', group: 'network', blurb: 'Cellular base-station (BTS/BBU) exposure' },
   { id: 'bgp', label: 'BGP ROUTE', icon: Globe, placeholder: 'IP or ASN', color: '#00E5FF', group: 'network', blurb: 'Autonomous system and prefixes' },
   { id: 'mac', label: 'MAC ADDR', icon: Fingerprint, placeholder: 'MAC address', color: '#FFD700', group: 'network', blurb: 'Hardware vendor lookup' },
   { id: 'sweep', label: 'IP SWEEP', icon: Crosshair, placeholder: 'Enter IP address (e.g. 8.8.8.8)', color: '#FF3D3D', group: 'network', blurb: 'Scan an entire subnet' },
@@ -113,12 +115,37 @@ function OsintPanelInner({ isMobile, onSweepVisualize, onScanGeolocate }: OsintP
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [expanded, setExpanded] = useState(true);
-  const [history, setHistory] = useState<{tab:string;query:string;time:string}[]>([]);
+  // Recent-scan history, persisted to localStorage so it survives reloads.
+  // Each entry: { tab, query, time, ts } — ts is epoch ms for sorting/dates,
+  // time is the human-readable wall-clock it ran. Legacy entries (no ts)
+  // hydrate with a fallback so old saves keep working.
+  const HISTORY_KEY = 'osiris.recon.history';
+  type HistoryEntry = { tab: string; query: string; time: string; ts?: number };
+  const [history, setHistory] = useState<HistoryEntry[]>(() => {
+    try {
+      const raw = localStorage.getItem(HISTORY_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.slice(0, 50) : [];
+    } catch {
+      return [];
+    }
+  });
+  // Persist on every change (debounced not needed — writes are tiny).
+  useEffect(() => {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 50)));
+    } catch { /* storage full / private mode — history just stays in memory */ }
+  }, [history, HISTORY_KEY]);
   const [sweepResult, setSweepResult] = useState<any>(null);
   const [sweepProgress, setSweepProgress] = useState<{ current: number; total: number } | null>(null);
   const [sweepCidr, setSweepCidr] = useState(24);
   /** PORT SCAN runs a Shodan host port scan, or — as an option — the GLOBAL SWEEP of the subnet. */
   const [scanMode, setScanMode] = useState<'ports' | 'sweep'>('ports');
+  /** Per-IP examination results for RAN-flagged sweep hosts. Keyed by IP:
+   *  { loading, quick?, ran?, error? }. One quick scan + RAN read per click —
+   *  the scanner proxy is rate-limited (5/min), so examination is on demand,
+   *  never batch. */
+  const [btsExams, setBtsExams] = useState<Record<string, any>>({});
   const [cveCache, setCveCache] = useState<Record<string, any>>({});
   // CHAIN INTEL carries two views: the daily brief needs no target, the wallet
   // lookup uses the shared query bar.
@@ -183,6 +210,34 @@ function OsintPanelInner({ isMobile, onSweepVisualize, onScanGeolocate }: OsintP
     });
   }, [cveCache]);
 
+  // Examine one RAN-flagged sweep host: one local quick port scan plus the
+  // full RAN read, run on demand so the scanner's 5/min rate limit holds.
+  const examineBts = useCallback(async (ip: string) => {
+    if (btsExams[ip]?.loading) return;
+    setBtsExams(prev => ({ ...prev, [ip]: { loading: true, error: null, quick: null, ran: null } }));
+    try {
+      const [quickRes, ranRes] = await Promise.allSettled([
+        fetch(`/api/scanner?target=${encodeURIComponent(ip)}&type=quick`),
+        fetch(`/api/osint/ran?ip=${encodeURIComponent(ip)}`),
+      ]);
+      let quick = null, ran = null, error: string | null = null;
+      if (quickRes.status === 'fulfilled') {
+        const q = await quickRes.value.json().catch(() => null);
+        quick = q?.openPorts || q?.ports || q?.results || null;
+        if (!quick && q?.error) error = q.error;
+      } else {
+        error = quickRes.reason?.message || 'quick scan failed';
+      }
+      if (ranRes.status === 'fulfilled') {
+        const r = await ranRes.value.json().catch(() => null);
+        ran = r?.ran || r || null;
+      }
+      setBtsExams(prev => ({ ...prev, [ip]: { loading: false, error, quick, ran } }));
+    } catch (e: any) {
+      setBtsExams(prev => ({ ...prev, [ip]: { loading: false, error: e?.message || 'examine failed', quick: null, ran: null } }));
+    }
+  }, [btsExams]);
+
     const handleSelfTrack = () => {
       setLoading(true);
       setError('');
@@ -221,6 +276,7 @@ function OsintPanelInner({ isMobile, onSweepVisualize, onScanGeolocate }: OsintP
     // Shodan subnet sweep — the GLOBAL SWEEP tab, and PORT SCAN in its sweep mode.
     if (activeTab === 'sweep' || (activeTab === 'scanner' && scanMode === 'sweep')) {
       setSweepResult(null);
+      setBtsExams({});
       const cidr = sweepCidr;
       const totalHosts = Math.pow(2, 32 - cidr);
       setSweepProgress({ current: 0, total: totalHosts });
@@ -251,21 +307,10 @@ function OsintPanelInner({ isMobile, onSweepVisualize, onScanGeolocate }: OsintP
           }
         }, (done) => setSweepProgress({ current: done, total: totalHosts }));
 
-        const devices: SweepDevice[] = [];
+        const { devices, ran } = buildSweepDevices(shodanResults);
         const deviceBreakdown: Record<string, number> = {};
-        for (const sr of shodanResults) {
-          if (!sr) continue;
-          const classification = classifyDevice(sr.ports, sr.cpes, sr.tags);
-          const risk = assessRisk({ ports: sr.ports, vulns: sr.vulns });
-          devices.push({
-            ip: sr.ip, ports: sr.ports, hostnames: sr.hostnames,
-            cpes: sr.cpes, vulns: sr.vulns, tags: sr.tags,
-            device_type: classification.device_type,
-            device_icon: classification.device_icon,
-            device_color: classification.device_color,
-            risk_level: risk
-          });
-          deviceBreakdown[classification.device_type] = (deviceBreakdown[classification.device_type] || 0) + 1;
+        for (const d of devices) {
+          deviceBreakdown[d.device_type] = (deviceBreakdown[d.device_type] || 0) + 1;
         }
 
         setSweepResult({
@@ -274,11 +319,12 @@ function OsintPanelInner({ isMobile, onSweepVisualize, onScanGeolocate }: OsintP
           cidr,
           target_ip: initData.target_ip,
           devices,
+          ran,
           summary: { total_hosts: totalHosts, total_responsive: devices.length, device_breakdown: deviceBreakdown },
           sweep_time_ms: Date.now() - t0
         });
         setSweepProgress(null);
-        setHistory(prev => [{ tab: activeTab, query, time: new Date().toLocaleTimeString() }, ...prev.slice(0, 9)]);
+        setHistory(prev => [{ tab: activeTab, query, time: new Date().toLocaleTimeString(), ts: Date.now() }, ...prev.slice(0, 9)]);
       } catch (err: any) {
         setError(err.message);
         setSweepProgress(null);
@@ -310,6 +356,7 @@ function OsintPanelInner({ isMobile, onSweepVisualize, onScanGeolocate }: OsintP
         case 'subdomains': url = `/api/scanner?target=${encodeURIComponent(query)}&type=subdomains`; break;
         case 'tech': url = `/api/scanner?target=${encodeURIComponent(query)}&type=tech`; break;
         case 'shodan': url = `https://internetdb.shodan.io/${encodeURIComponent(query)}`; break;
+        case 'ran': url = `/api/osint/ran?ip=${encodeURIComponent(query)}`; break;
       }
       const res = await fetch(url, activeTab === 'shodan' ? { cache: 'no-store' } : undefined);
       if (activeTab === 'shodan' && res.status === 404) {
@@ -319,7 +366,7 @@ function OsintPanelInner({ isMobile, onSweepVisualize, onScanGeolocate }: OsintP
       }
       if (activeTab === 'leaks' && res.status === 404) {
         setResults({ email: query, breached: false, breaches: [], data_exposed: [] });
-        setHistory(prev => [{ tab: activeTab, query, time: new Date().toLocaleTimeString() }, ...prev.slice(0, 9)]);
+        setHistory(prev => [{ tab: activeTab, query, time: new Date().toLocaleTimeString(), ts: Date.now() }, ...prev.slice(0, 9)]);
         setLoading(false);
         return;
       }
@@ -348,7 +395,7 @@ function OsintPanelInner({ isMobile, onSweepVisualize, onScanGeolocate }: OsintP
         }
 
         setResults(parsedData);
-        setHistory(prev => [{ tab: activeTab, query, time: new Date().toLocaleTimeString() }, ...prev.slice(0, 9)]);
+        setHistory(prev => [{ tab: activeTab, query, time: new Date().toLocaleTimeString(), ts: Date.now() }, ...prev.slice(0, 9)]);
         
         // Geolocate the target in the background
         if (activeTab === 'phone') {
@@ -632,6 +679,72 @@ function OsintPanelInner({ isMobile, onSweepVisualize, onScanGeolocate }: OsintP
             </div>
           )}
           {renderFallbackExcluding(['ip','hostnames','ports','tags','vulns','cpes'])}
+        </div>
+      );
+    }
+
+    // ── RAN / CELL ──
+    if (activeTab === 'ran') {
+      const ran = r.ran || {};
+      const verdict = ran.verdict || 'NOT_RAN';
+      const verdictColor = verdict === 'LIKELY_RAN' ? '#3DDC84' : verdict === 'POSSIBLE_RAN' ? '#FF9500' : 'var(--text-muted)';
+      return (
+        <div>
+          <SectionHeader title="RAN / CELL EXPOSURE" icon={Radio} color="#3DDC84" />
+          <ResultRow label="Target IP" value={r.ip || query} color="#3DDC84" />
+          {r.status && r.status !== 'ok' && <ResultRow label="Status" value={r.status} />}
+          <div className="flex items-center gap-2 py-1.5">
+            <span className="text-[10px] font-mono text-[var(--text-muted)] uppercase tracking-wider w-[90px] flex-shrink-0 pt-0.5">Verdict</span>
+            {verdict === 'NOT_RAN' ? (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-[#1A1A18] text-[var(--text-muted)] border border-[var(--border-secondary)]/30">
+                NOT RAN GEAR
+              </span>
+            ) : (
+              <StatusBadge ok={verdict === 'LIKELY_RAN'} label={verdict.replace('_RAN', ' RAN')} />
+            )}
+            {typeof ran.score === 'number' && (
+              <span className="text-[10px] font-mono text-[var(--text-muted)]">
+                confidence {ran.score}/10 — passive InternetDB read, not a tower fix
+              </span>
+            )}
+          </div>
+          {Array.isArray(ran.matched_ports) && ran.matched_ports.length > 0 && (
+            <ResultRow label="Mgmt Ports" value={ran.matched_ports.join(', ')} color="#3DDC84" />
+          )}
+          {Array.isArray(ran.vendors) && ran.vendors.length > 0 && (
+            <ResultRow label="Vendors" value={ran.vendors.join(', ')} color="#FF9500" />
+          )}
+          {Array.isArray(ran.products) && ran.products.length > 0 && (
+            <ResultRow label="Equipment" value={ran.products.join(', ')} color="#3DDC84" />
+          )}
+          {Array.isArray(ran.rationale) && ran.rationale.length > 0 && (
+            <div className="mt-1 space-y-0.5">
+              {ran.rationale.slice(0, 6).map((line: string, i: number) => (
+                <div key={i} className="text-[10px] font-mono text-[var(--text-secondary)]">↳ {line}</div>
+              ))}
+            </div>
+          )}
+          {r.hostnames?.length > 0 && <ResultRow label="Hostnames" value={r.hostnames.join(', ')} />}
+          {Array.isArray(r.ports) && r.ports.length > 0 && <ResultRow label="Open Ports" value={r.ports.join(', ')} />}
+          {r.tags?.length > 0 && <ResultRow label="Tags" value={r.tags.join(', ')} />}
+          {r.cpes?.length > 0 && <ResultRow label="CPEs" value={r.cpes.join(' | ')} />}
+          {r.vulns?.length > 0 && (
+            <div className="mt-2 p-2 border border-red-500/30 bg-red-500/10 rounded">
+              <span className="text-[11px] font-mono text-red-400 font-bold mb-1 block">VULNERABILITIES ({r.vulns.length})</span>
+              <div className="flex flex-wrap gap-1">
+                {r.vulns.slice(0, 10).map((v: string) => (
+                  <a key={v} href={`https://nvd.nist.gov/vuln/detail/${v}`} target="_blank" rel="noreferrer" className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#1A1A18] text-[#8A8880] hover:text-[#FF3D3D]">{v}</a>
+                ))}
+                {r.vulns.length > 10 && <span className="text-[10px] font-mono text-[#8A8880]">+{r.vulns.length - 10} more</span>}
+              </div>
+            </div>
+          )}
+          <div className="mt-2 px-2 py-1.5 rounded bg-[#1A1A18] border border-[var(--border-secondary)]/20">
+            <span className="text-[9px] font-mono text-[var(--text-muted)]">
+              Passive only — Shodan InternetDB for {r.ip || query}. Base-station identification ≠ tower coordinates; cross-ref LAC/CellID for a real fix.
+            </span>
+          </div>
+          {renderFallbackExcluding(['ip','status','hostnames','ports','tags','vulns','cpes','ran'])}
         </div>
       );
     }
@@ -1464,6 +1577,87 @@ function OsintPanelInner({ isMobile, onSweepVisualize, onScanGeolocate }: OsintP
                 );
               })}
             </div>
+            {/* RAN / Base-station summary */}
+            {(sweepResult.ran?.likely?.length > 0 || sweepResult.ran?.possible?.length > 0) && (
+              <div className="mt-2.5 p-2 rounded-lg border border-[#3DDC84]/30 bg-[#3DDC84]/5">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-mono tracking-widest text-[#3DDC84] font-bold">RAN / BASE-STATION DETECTED</span>
+                  <span className="text-[9px] font-mono text-[#8A8880]">click a host to examine</span>
+                </div>
+                {sweepResult.ran?.likely?.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mb-1">
+                    {sweepResult.ran.likely.map((ip: string) => {
+                      const exam = btsExams[ip];
+                      return (
+                        <button
+                          key={ip}
+                          onClick={() => examineBts(ip)}
+                          disabled={exam?.loading}
+                          title="Run local quick port scan + RAN read against this host"
+                          className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#3DDC84]/15 text-[#3DDC84] border border-[#3DDC84]/40 hover:bg-[#3DDC84]/30 hover:scale-105 transition-all disabled:opacity-50 disabled:cursor-wait"
+                        >
+                          {exam?.loading ? '◌' : '◈'} {ip}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {sweepResult.ran?.possible?.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {sweepResult.ran.possible.map((ip: string) => {
+                      const exam = btsExams[ip];
+                      return (
+                        <button
+                          key={ip}
+                          onClick={() => examineBts(ip)}
+                          disabled={exam?.loading}
+                          title="Run local quick port scan + RAN read against this host"
+                          className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-[#FF9500]/10 text-[#FF9500] border border-[#FF9500]/30 hover:bg-[#FF9500]/25 hover:scale-105 transition-all disabled:opacity-50 disabled:cursor-wait"
+                        >
+                          {exam?.loading ? '◌' : '◈'} {ip}?
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {/* Per-host examination results */}
+                {Object.keys(btsExams).length > 0 && (
+                  <div className="mt-2 space-y-1.5">
+                    {Object.entries(btsExams).map(([ip, exam]: [string, any]) => {
+                      if (!exam || (!exam.loading && !exam.quick && !exam.ran && !exam.error)) return null;
+                      const ports = Array.isArray(exam.quick) ? exam.quick : [];
+                      const verdict = exam.ran?.verdict;
+                      const vendors = Array.isArray(exam.ran?.vendors) ? exam.ran.vendors : [];
+                      const color = verdict === 'LIKELY_RAN' ? '#3DDC84' : verdict === 'POSSIBLE_RAN' ? '#FF9500' : '#8A8880';
+                      return (
+                        <div key={ip} className="rounded border border-white/10 bg-[#0D0D0C]/80 p-1.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[10px] font-mono font-bold" style={{ color }}>{ip}</span>
+                            {exam.loading ? (
+                              <span className="text-[9px] font-mono text-[#8A8880]">scanning…</span>
+                            ) : verdict ? (
+                              <span className="text-[9px] font-mono" style={{ color }}>{verdict.replace('_RAN', ' RAN')}</span>
+                            ) : null}
+                          </div>
+                          {exam.error && <div className="text-[9px] font-mono text-[#FF3D3D] mt-0.5">{exam.error}</div>}
+                          {ports.length > 0 && (
+                            <div className="text-[9px] font-mono text-[#8A8880] mt-0.5">
+                              open: {ports.map((p: any) => `${p.port}${p.service && p.service !== 'Unknown' ? `/${p.service}` : ''}`).slice(0, 10).join(', ')}{ports.length > 10 ? ` +${ports.length - 10}` : ''}
+                            </div>
+                          )}
+                          {vendors.length > 0 && (
+                            <div className="text-[9px] font-mono text-[#FF9500] mt-0.5">vendor: {vendors.join(', ')}</div>
+                          )}
+                          {!exam.loading && ports.length === 0 && !exam.error && (
+                            <div className="text-[9px] font-mono text-[#8A8880] mt-0.5">no open ports in quick scan</div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           {/* Visualize Button */}
           <div className="p-3 border-b border-[#2A2A28]">
@@ -1510,6 +1704,16 @@ function OsintPanelInner({ isMobile, onSweepVisualize, onScanGeolocate }: OsintP
                       </span>
                     )}
                     <span className={`${isFullScreen ? "text-[11px]" : "text-[9px]"} font-mono px-1.5 py-0.5 rounded whitespace-nowrap`} style={{ backgroundColor: device.device_color + '20', color: device.device_color, border: `1px solid ${device.device_color}40` }}>{device.device_type}</span>
+                    {device.ran?.verdict === 'LIKELY_RAN' && (
+                      <span className={`${isFullScreen ? "text-[11px]" : "text-[9px]"} font-mono px-1.5 py-0.5 rounded whitespace-nowrap bg-[#3DDC84]/15 text-[#3DDC84] border border-[#3DDC84]/50 font-bold`}>
+                        BTS
+                      </span>
+                    )}
+                    {device.ran?.verdict === 'POSSIBLE_RAN' && (
+                      <span className={`${isFullScreen ? "text-[11px]" : "text-[9px]"} font-mono px-1.5 py-0.5 rounded whitespace-nowrap bg-[#FF9500]/10 text-[#FF9500] border border-[#FF9500]/30`}>
+                        RAN?
+                      </span>
+                    )}
                     {isFullScreen && (
                       <ChevronDown className={`w-4 h-4 text-[#5C5A54] transition-transform flex-shrink-0 ${isExpanded ? 'rotate-180' : ''}`} />
                     )}
@@ -1651,17 +1855,52 @@ function OsintPanelInner({ isMobile, onSweepVisualize, onScanGeolocate }: OsintP
 
       {history.length > 0 && !results && activeTab !== 'fingerprint' && activeTab !== 'donbot' && (
         <div className="space-y-1">
-          <span className="text-[10px] font-mono tracking-widest text-[var(--text-muted)]">RECENT SCANS</span>
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-mono tracking-widest text-[var(--text-muted)]">RECENT SCANS</span>
+            <span className="flex items-center gap-1.5">
+              <button
+                onClick={() => {
+                  const blob = new Blob([JSON.stringify(history, null, 2)], { type: 'application/json' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `osiris-recon-history-${new Date().toISOString().slice(0, 10)}.json`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+                title="Download full history as JSON"
+                className="flex items-center gap-1 px-2 py-0.5 rounded text-[8px] font-mono tracking-wider uppercase border border-white/10 bg-white/[0.03] hover:bg-white/[0.08] hover:border-[#D4AF37]/40 text-[var(--text-muted)] hover:text-[#D4AF37] transition-all"
+              >
+                <Download className="w-2.5 h-2.5" /> SAVE
+              </button>
+              <button
+                onClick={() => { setHistory([]); try { localStorage.removeItem(HISTORY_KEY); } catch {} }}
+                title="Clear history"
+                className="flex items-center gap-1 px-2 py-0.5 rounded text-[8px] font-mono tracking-wider uppercase border border-white/10 bg-white/[0.03] hover:bg-white/[0.08] hover:border-red-500/50 text-[var(--text-muted)] hover:text-red-400 transition-all"
+              >
+                <Trash2 className="w-2.5 h-2.5" /> CLEAR
+              </button>
+            </span>
+          </div>
           {history.slice(0, 5).map((h, i) => (
-            <button key={i} onClick={() => { setActiveTab(h.tab); setQuery(h.query); }}
+            <button key={`${h.ts ?? i}-${h.query}`} onClick={() => { setActiveTab(h.tab); setQuery(h.query); }}
               className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg hover:bg-[var(--hover-accent)] transition-colors text-left">
               <div className="flex items-center gap-2">
                 <span className="text-[10px] font-mono" style={{ color: TABS.find(t => t.id === h.tab)?.color }}>{TABS.find(t => t.id === h.tab)?.label}</span>
                 <span className="text-[11px] font-mono text-[var(--text-secondary)]">{h.query}</span>
               </div>
-              <span className="text-[9px] font-mono text-[var(--text-muted)]">{h.time}</span>
+              <span className="text-[9px] font-mono text-[var(--text-muted)]">
+                {h.ts && new Date(h.ts).toDateString() !== new Date().toDateString()
+                  ? new Date(h.ts).toLocaleDateString() + ' · '
+                  : ''}{h.time}
+              </span>
             </button>
           ))}
+          {history.length > 5 && (
+            <span className="text-[8px] font-mono text-[var(--text-muted)]/60 px-1">
+              +{history.length - 5} more in session history ({history.length} total)
+            </span>
+          )}
         </div>
       )}
     </div>

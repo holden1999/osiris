@@ -1,3 +1,5 @@
+import { assessRan, type RanAssessment } from './ran-intel';
+
 export interface SweepDevice {
   ip: string;
   ports: number[];
@@ -9,6 +11,14 @@ export interface SweepDevice {
   device_icon: string;
   device_color: string;
   risk_level: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
+  /** Passive RAN (bts/bbu/enodeb) classification of this host. */
+  ran: RanAssessment;
+}
+
+/** Devices flagged as cellular base-station gear during a sweep. */
+export interface SweepRanSummary {
+  likely: string[];
+  possible: string[];
 }
 
 export interface SweepResult {
@@ -27,6 +37,7 @@ export interface SweepResult {
   cidr: number;
   target_ip: string;
   devices: SweepDevice[];
+  ran: SweepRanSummary;
   summary: {
     total_hosts: number;
     total_responsive: number;
@@ -206,4 +217,58 @@ const WELL_KNOWN_PORTS: Record<number, string> = {
 
 export function portServiceName(port: number): string | undefined {
   return WELL_KNOWN_PORTS[port];
+}
+
+/**
+ * Turn raw InternetDB sweep records into swept devices, classifying each host
+ * and flagging likely / possible RAN (base-station) gear with assessRan.
+ * Likely-RAN devices get a distinct device type/color so the globe view
+ * separates BTS/BBU hosts from ordinary routers and servers.
+ */
+export function buildSweepDevices(records: (ShodanInternetDBResponse | null)[]): {
+  devices: SweepDevice[];
+  ran: SweepRanSummary;
+} {
+  const devices: SweepDevice[] = [];
+  const ran: SweepRanSummary = { likely: [], possible: [] };
+
+  for (const sr of records) {
+    if (!sr) continue;
+    const classification = classifyDevice(sr.ports, sr.cpes, sr.tags);
+    const risk = assessRisk({ ports: sr.ports, vulns: sr.vulns });
+    const ranAssessment = assessRan({
+      ports: sr.ports,
+      cpes: sr.cpes,
+      hostnames: sr.hostnames,
+      tags: sr.tags,
+    });
+
+    // Override the label only on a confident RAN read; "possible" keeps its
+    // normal device classification but stays visible in the RAN summary.
+    const device_type =
+      ranAssessment.verdict === 'LIKELY_RAN' ? 'Base Station (RAN)' : classification.device_type;
+    const device_color =
+      ranAssessment.verdict === 'LIKELY_RAN' ? '#3DDC84' : classification.device_color;
+    const device_icon =
+      ranAssessment.verdict === 'LIKELY_RAN' ? 'Radio' : classification.device_icon;
+
+    if (ranAssessment.verdict === 'LIKELY_RAN') ran.likely.push(sr.ip);
+    if (ranAssessment.verdict === 'POSSIBLE_RAN') ran.possible.push(sr.ip);
+
+    devices.push({
+      ip: sr.ip,
+      ports: sr.ports,
+      hostnames: sr.hostnames,
+      cpes: sr.cpes,
+      vulns: sr.vulns,
+      tags: sr.tags,
+      device_type,
+      device_icon,
+      device_color,
+      risk_level: risk,
+      ran: ranAssessment,
+    });
+  }
+
+  return { devices, ran };
 }

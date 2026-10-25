@@ -66,6 +66,47 @@ const CATEGORIES = [
   { label: 'Emergency', query: 'emergency shelter evacuation' },
 ] as const;
 
+// Curated one-click intel layers (imported straight from a known Feature
+// Service instead of a catalog search). OpenCellID cell-tower coordinates
+// as published on ArcGIS Hub by the National Geospatial-Intelligence Agency:
+// https://hub.arcgis.com/datasets/nga::opencellid-cell-towers-140000000
+// Layer 6 of Communication_Media_Use — covers Africa (extent -25..58E, -35..38N).
+// Data © OpenCellID contributors (CC BY-SA 4.0).
+const CELL_TOWERS_SERVICE =
+  'https://services1.arcgis.com/cc7nIINtrZ67dyVJ/arcgis/rest/services/Communication_Media_Use/FeatureServer/6';
+
+interface PresetLayer {
+  id: string;
+  label: string;
+  title: string;
+  url: string;
+  color: string;
+}
+
+const PRESET_LAYERS: PresetLayer[] = [
+  {
+    id: 'nga-opencellid-cell-towers',
+    label: 'Cell Towers',
+    title: 'Cell Towers (OpenCellID · NGA)',
+    url: CELL_TOWERS_SERVICE,
+    color: '#3DDC84',
+  },
+  {
+    id: 'nga-gcm-cables',
+    label: 'Cable Routes',
+    title: 'Submarine Cables (GCM · NGA)',
+    url: 'https://services1.arcgis.com/cc7nIINtrZ67dyVJ/arcgis/rest/services/Communication_Media_Use/FeatureServer/7',
+    color: '#00E5FF',
+  },
+  {
+    id: 'nga-gcm-landing',
+    label: 'Landing Stations',
+    title: 'Cable Landing Stations (GCM · NGA)',
+    url: 'https://services1.arcgis.com/cc7nIINtrZ67dyVJ/arcgis/rest/services/Communication_Media_Use/FeatureServer/8',
+    color: '#FF9800',
+  },
+];
+
 const LAYER_COLORS = [
   '#D4AF37', // Gold (default)
   '#00E5FF', // Cyan
@@ -185,6 +226,40 @@ export default function ArcGISPanel({
       runSearch(cat.query);
     }
   };
+
+  // Import a curated layer straight from its Feature Service. Mirrors what
+  // handleImport does for search results, minus the catalog round-trip.
+  const handlePresetImport = useCallback(
+    async (preset: PresetLayer) => {
+      if (importedIds.includes(preset.id)) return;
+      setImportingId(preset.id);
+      setError('');
+
+      try {
+        const params = new URLSearchParams({ service: preset.url });
+        if (bboxParam) params.set('bbox', bboxParam);
+
+        const res = await fetch(`/api/arcgis?${params.toString()}`);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || `Import failed (${res.status})`);
+        }
+
+        const geojson = await res.json();
+        const count =
+          geojson.features?.length ??
+          (geojson.type === 'FeatureCollection' ? 0 : 1);
+
+        setFeatureCounts((prev) => ({ ...prev, [preset.id]: count }));
+        onImportLayer({ id: preset.id, title: preset.title, url: preset.url, geojson, color: preset.color, opacity: 0.8 });
+      } catch (err: any) {
+        setError(err.message || 'Import failed');
+      } finally {
+        setImportingId(null);
+      }
+    },
+    [bboxParam, onImportLayer, importedIds],
+  );
 
   const totalFeatures = Object.values(featureCounts).reduce((a, b) => a + b, 0);
 
@@ -415,6 +490,34 @@ export default function ArcGISPanel({
             {cat.label}
           </button>
         ))}
+      </div>
+
+      {/* ── Curated Intel Layers ───────────────────────────────── */}
+      <div className="flex flex-wrap gap-1.5 shrink-0">
+        {PRESET_LAYERS.map((preset) => {
+          const isLiving = importedIds.includes(preset.id);
+          const isImporting = importingId === preset.id;
+          return (
+            <button
+              key={preset.id}
+              onClick={() => handlePresetImport(preset)}
+              disabled={isImporting || isLiving}
+              title={isLiving ? 'Layer already live on the map' : preset.title}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[9px] font-mono tracking-[0.1em] uppercase transition-all border ${
+                isLiving
+                  ? 'border-current/40 text-current opacity-90'
+                  : isImporting
+                    ? 'bg-white/[0.06] border-white/15 text-[var(--text-muted)] cursor-wait'
+                    : 'bg-black/40 border-white/10 text-[var(--text-muted)] hover:border-current/40'
+              }`}
+              style={{ color: preset.color }}
+            >
+              <Radio className="w-3 h-3" />
+              {isImporting ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+              <span>{preset.label}</span>
+            </button>
+          );
+        })}
       </div>
 
       {/* ── Error ─────────────────────────────────────────────── */}

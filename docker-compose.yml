@@ -67,6 +67,7 @@ services:
     environment:
       - OSIRIS_KEY=${SCANNER_KEY:-}
       - SCANNER_PORT=7700
+      - ALLOW_PRIVATE_TARGETS=${ALLOW_PRIVATE_TARGETS:-}
     restart: unless-stopped
     networks:
       - default

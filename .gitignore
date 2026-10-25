@@ -67,3 +67,40 @@ scanner_backend_backup.js
 # Local checkouts of third-party tools; not part of this app
 /scratch/astra/
 /scratch/mast3r/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+ENV/
+
+# Security recon, intel dumps & reverse engineering artifacts
+*_recon.txt
+*_analysis.txt
+*_report.txt
+*_summary.txt
+*_dump.txt
+*_config.txt
+*_map.txt
+*_intel.txt
+*_credentials.txt
+*.session.json
+admin_session.json
+hw_ctree*.xml
+checkcode.gif
+login_page.html
+login.css
+frame.css
+safelogin.js
+ssmpdes.js
+RndSecurityFormat.js
+util.js
+salma_telkomsel/
+tsel_ai_hub/
+tsel_ai_hub_full/
+/scratch/*_dump.txt
+/scratch/cctv-ips.md
+
